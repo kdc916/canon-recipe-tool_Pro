@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
-  <title>Canon Recipe Generator Pro (v11.5.2 Auto FilmSim + Preview EV AfterOnly)</title>
+  <title>Canon Recipe Generator Pro (v11.5.5 AutoFix)</title>
 
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface@0.0.7/dist/blazeface.min.js"></script>
@@ -312,9 +312,9 @@
   <div class="app">
     <div class="header">
       <div class="title">
-        <h1>📷 Canon Recipe Generator Pro <span style="color:var(--cyan); font-size:14px;">v11.5.2 Auto FilmSim + Preview EV (After Only)</span></h1>
+        <h1>📷 Canon Recipe Generator Pro <span style="color:var(--cyan); font-size:14px;">v11.5.5 AutoFix (FaceGate + Top3 + GraySuppress)</span></h1>
         <p>
-          ✅ Auto FilmSim(타겟만) · ✅ 2장 정렬 안정 · ✅ Preview EV 노출 보정(-5~+5)<br/>
+          ✅ Auto FilmSim(타겟만/그리드기반) · ✅ 얼굴 오판 게이트 · ✅ 신뢰 낮으면 Top3 안내 · ✅ Preview EV After-only<br/>
           Preview EV는 <b>우측(적용 결과)</b>에만 적용됩니다. (좌측 원본은 고정)
         </p>
       </div>
@@ -660,6 +660,7 @@
           </div>
 
           <canvas id="workCanvas" class="hide"></canvas>
+          <canvas id="aiCanvas" class="hide"></canvas>
         </div>
       </div>
 
@@ -667,6 +668,16 @@
   </div>
 
 <script>
+/* =========================================================
+   v11.5.5 통합 패치 핵심
+   1) ✅ Worker transferable 버그 방지: 복사본만 transfer
+   2) ✅ Face 오판 게이트: 얼굴 박스 크기+확률+스킨비율로 portrait 판정 제한
+   3) ✅ Auto FilmSim: isPortrait는 skin 비율로 재확인 (ai portrait 단독 금지)
+   4) ✅ Auto FilmSim: confidence 낮으면 자동 적용하지 않고 Top3 안내
+   5) ✅ Grid stats: 무채색/저채도 픽셀 강한 억제(GraySuppress)
+   6) ✅ Preview: before putImageData 1회 + EV in-place
+========================================================= */
+
 /* =========================================================
    State
 ========================================================= */
@@ -700,8 +711,7 @@ let previewBusy = false;
 
 let pvBeforeCanvas = null;
 let pvAfterCanvas  = null;
-let pvSourceCache  = null; // {key, before, w, h}
-
+let pvSourceCache  = null; // {key, before, w, h, beforeDrawn:boolean}
 let pvDragging = false;
 
 // Auto FilmSim
@@ -710,6 +720,9 @@ let lastAutoSuggest = null;
 // Preview EV LUTs
 let SRGB_TO_LIN_256 = null;
 let LIN_TO_SRGB_4096 = null;
+
+// TF backend init flag
+let tfBackendInited = false;
 
 /* =========================================================
    Presets
@@ -953,7 +966,10 @@ function refreshAutoPickReady(){
     return;
   }
   if(lastAutoSuggest){
-    hint.textContent = `최근 추천: ${presetDisplayName(lastAutoSuggest.key)} · ${lastAutoSuggest.strength}% (신뢰 ${Math.round(lastAutoSuggest.confidence*100)}%) — ${lastAutoSuggest.reason}`;
+    const top3 = (lastAutoSuggest.top3||[]).map(k=>presetDisplayName(k)).join(" / ");
+    const t3 = top3 ? ` Top3: ${top3}` : "";
+    hint.textContent =
+      `최근 추천: ${presetDisplayName(lastAutoSuggest.key)} · ${lastAutoSuggest.strength}% (신뢰 ${Math.round(lastAutoSuggest.confidence*100)}%) — ${lastAutoSuggest.reason}${t3}`;
   }else{
     hint.textContent = "타겟만으로 FilmSim + 강도 추천 가능. (버튼 클릭 또는 ON 후 분석)";
   }
@@ -1123,6 +1139,24 @@ function updatePreviewThumb(file, imgEl, nameEl){
 }
 
 /* =========================================================
+   AI backend init (webgl→wasm 폴백)
+========================================================= */
+async function initTfBackendOnce(){
+  if(tfBackendInited) return;
+  tfBackendInited = true;
+  await tf.ready();
+  try{
+    await tf.setBackend("webgl");
+    await tf.ready();
+  }catch(e){
+    try{
+      await tf.setBackend("wasm");
+      await tf.ready();
+    }catch(_){}
+  }
+}
+
+/* =========================================================
    AI load
 ========================================================= */
 function setAIUI(state, text){
@@ -1139,7 +1173,7 @@ async function ensureAIModelsLoaded(){
 
   setAIUI("loading", "AI 로딩중…(자동 모드)");
   try{
-    await tf.ready();
+    await initTfBackendOnce();
     faceModel = await blazeface.load();
     classifyModel = await mobilenet.load();
     setAIUI("ready", "AI 준비완료");
@@ -1280,6 +1314,36 @@ function resampleCanvasToSize(srcCanvas, w, h){
 }
 
 /* =========================================================
+   Cheap skin ratio estimator (for FaceGate)
+========================================================= */
+function estimateSkinRatioFromImageData(imgData, sampleStep=3){
+  const d = imgData.data;
+  const w = imgData.width, h = imgData.height;
+  const step = Math.max(1, sampleStep|0);
+  let skin=0, total=0;
+
+  for(let y=0;y<h;y+=step){
+    const row = y*w*4;
+    for(let x=0;x<w;x+=step){
+      const i = row + x*4;
+      const r=d[i], g=d[i+1], b=d[i+2];
+      const yv = 0.299*r + 0.587*g + 0.114*b;
+      if(yv < 28 || yv > 245) continue;
+
+      const mx = Math.max(r,g,b), mn=Math.min(r,g,b);
+      if(mx-mn < 10) continue; // 저채도 억제
+
+      const cb = 128 - 0.168736*r - 0.331264*g + 0.5*b;
+      const cr = 128 + 0.5*r - 0.418688*g - 0.081312*b;
+      total++;
+      if(cb >= 77 && cb <= 127 && cr >= 133 && cr <= 173) skin++;
+    }
+  }
+  if(total<=0) return 0;
+  return clamp(skin/total, 0, 1);
+}
+
+/* =========================================================
    PSE HSL Guard
 ========================================================= */
 function pseConeMaxS01(l01){
@@ -1383,7 +1447,7 @@ function buildPresetOnlyRecipe(presetKey, presetStrength01){
 }
 
 /* =========================================================
-   Preview EV apply (linear domain, LUT)
+   Preview EV apply (linear domain, LUT) - in-place
 ========================================================= */
 function buildGammaTables(){
   if(SRGB_TO_LIN_256 && LIN_TO_SRGB_4096) return;
@@ -1405,28 +1469,21 @@ function lin01ToSrgb255(x){
   const idx = clamp(Math.round(x * 4095), 0, 4095);
   return LIN_TO_SRGB_4096[idx];
 }
-function applyExposureEVToImageData(srcImageData, ev){
+function applyExposureEVInPlace(imageData, ev){
   buildGammaTables();
-
-  const w = srcImageData.width, h = srcImageData.height;
-  const src = srcImageData.data;
-  const out = new ImageData(w,h);
-  const dst = out.data;
-
+  const src = imageData.data;
   const mul = Math.pow(2, clamp(ev, -5, 5));
   for(let i=0;i<src.length;i+=4){
     const a = src[i+3];
-
     const rl = SRGB_TO_LIN_256[src[i]]   * mul;
     const gl = SRGB_TO_LIN_256[src[i+1]] * mul;
     const bl = SRGB_TO_LIN_256[src[i+2]] * mul;
-
-    dst[i]   = lin01ToSrgb255(clamp(rl,0,1));
-    dst[i+1] = lin01ToSrgb255(clamp(gl,0,1));
-    dst[i+2] = lin01ToSrgb255(clamp(bl,0,1));
-    dst[i+3] = a;
+    src[i]   = lin01ToSrgb255(clamp(rl,0,1));
+    src[i+1] = lin01ToSrgb255(clamp(gl,0,1));
+    src[i+2] = lin01ToSrgb255(clamp(bl,0,1));
+    src[i+3] = a;
   }
-  return out;
+  return imageData;
 }
 
 /* =========================================================
@@ -1691,7 +1748,8 @@ function queuePreviewRender(reason){
 }
 
 /* =========================================================
-   ✅ v11.5.2: EV는 "우측(적용 결과)"에만 적용
+   ✅ Preview EV is After-only
+   ✅ before putImageData는 소스 변경 시 1회
 ========================================================= */
 async function renderPreview(reason){
   if(!prevFileState) return;
@@ -1715,15 +1773,19 @@ async function renderPreview(reason){
     const srcKey = `${sig}|${pd}`;
 
     let before;
+    let needBeforeDraw = false;
+
     if(pvSourceCache && pvSourceCache.key === srcKey && pvSourceCache.before){
       before = pvSourceCache.before;
+      needBeforeDraw = !pvSourceCache.beforeDrawn;
     }else{
       const ori = await getExifOrientation(prevFileState);
       const bm = await decodeToImageBitmap(prevFileState);
       const canvas = document.createElement("canvas");
       drawScaledToCanvas(canvas, bm, pd, ori);
       before = getImageDataFromCanvas(canvas);
-      pvSourceCache = { key: srcKey, before, w: before.width, h: before.height };
+      pvSourceCache = { key: srcKey, before, w: before.width, h: before.height, beforeDrawn: false };
+      needBeforeDraw = true;
     }
 
     let recipe;
@@ -1738,17 +1800,19 @@ async function renderPreview(reason){
       meta = `${recipe.meta} · preview ${Math.round(st01*100)}%`;
     }
 
-    // (1) after = recipe 적용
     const enablePoints = useRecipe;
     let after = applyRecipeToImageData(before, recipe, st01, enablePoints);
 
-    // (2) EV는 after에만 적용
     if(Math.abs(ev) >= 1e-6){
-      after = applyExposureEVToImageData(after, ev);
+      after = applyExposureEVInPlace(after, ev);
     }
 
     ensurePvCanvases(before.width, before.height);
-    pvBeforeCanvas.getContext("2d", {willReadFrequently:true}).putImageData(before, 0, 0);
+
+    if(needBeforeDraw){
+      pvBeforeCanvas.getContext("2d", {willReadFrequently:true}).putImageData(before, 0, 0);
+      pvSourceCache.beforeDrawn = true;
+    }
     pvAfterCanvas.getContext("2d", {willReadFrequently:true}).putImageData(after, 0, 0);
 
     const evTxt = (ev>=0?"+":"") + ev.toFixed(1);
@@ -1811,7 +1875,7 @@ function savePreviewPNG(){
   if(!prevFileState || !canvas.width || !canvas.height) return;
   const a = document.createElement("a");
   const ts = new Date();
-  const name = `preview_v11.5.2_${ts.getFullYear()}${String(ts.getMonth()+1).padStart(2,"0")}${String(ts.getDate()).padStart(2,"0")}_${String(ts.getHours()).padStart(2,"0")}${String(ts.getMinutes()).padStart(2,"0")}.png`;
+  const name = `preview_v11.5.5_${ts.getFullYear()}${String(ts.getMonth()+1).padStart(2,"0")}${String(ts.getDate()).padStart(2,"0")}_${String(ts.getHours()).padStart(2,"0")}${String(ts.getMinutes()).padStart(2,"0")}.png`;
   a.download = name;
   a.href = canvas.toDataURL("image/png");
   a.click();
@@ -1829,7 +1893,7 @@ window.addEventListener("beforeunload", ()=> terminateWorker());
 function initWorker(){
   if(worker) return;
 
-  // Worker code (kept compact; returns extra stats for Auto FilmSim)
+  // Worker code: 동일(분석 안정)
   const workerCode = `
     function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
 
@@ -2210,7 +2274,6 @@ function initWorker(){
       let specificPoints = [];
       let spDebug = null;
       if(enableSpecPoints && hasOrig){
-        // 이 빌드는 Worker 내부 포인트 계산을 생략 (필요시 확장 가능)
         specificPoints = [];
         spDebug = {minCount:0,candidates:0,note:"(disabled in worker for size)"}; 
         warnings.push("Specific Points: (이 빌드에서는 Worker 내부 포인트 계산을 생략했습니다. 필요하면 말씀해 주세요.)");
@@ -2251,11 +2314,255 @@ function initWorker(){
 }
 
 /* =========================================================
-   Auto FilmSim Picker (target-only)
+   Auto FilmSim (Grid)
 ========================================================= */
 function scoreClamp01(x){ return clamp(x, 0, 1); }
 
-function recommendFilmSimFromTarget(res){
+const FUJI_GRID_PROTOTYPES = {
+  provia:        { sat:0.2033, contrast:0.2773, shadow:0.1051, warmth:0.0417, teal:0.0103, lum:0.5534 },
+  velvia:        { sat:0.2883, contrast:0.2843, shadow:0.1220, warmth:0.0619, teal:0.0218, lum:0.5524 },
+  astia:         { sat:0.2235, contrast:0.2777, shadow:0.1079, warmth:0.0441, teal:0.0135, lum:0.5537 },
+  classic_chrome:{ sat:0.1637, contrast:0.2870, shadow:0.1177, warmth:0.0387, teal:0.0073, lum:0.5621 },
+  reala_ace:     { sat:0.2074, contrast:0.2883, shadow:0.1004, warmth:0.0421, teal:0.0136, lum:0.5741 },
+  classic_negative:   { sat:0.1554, contrast:0.2849, shadow:0.0646, warmth:0.0585, teal:-0.0005, lum:0.5984 },
+  nostalgic_negative: { sat:0.2285, contrast:0.2630, shadow:0.0610, warmth:0.0867, teal:0.0117, lum:0.5900 },
+  eterna:             { sat:0.1526, contrast:0.2599, shadow:0.0596, warmth:0.0350, teal:0.0100, lum:0.6036 },
+};
+function _sq(v){ return v*v; }
+
+/* ✅ v11.5.5: GraySuppress 강화 + regions 가중치 */
+function computeFujiGridStats(imgData, opts = {}){
+  const { data, width, height } = imgData;
+  const step = Math.max(1, opts.sampleStep || 2);
+
+  const ignoreBottom = clamp((opts.ignoreBottomRatio ?? 0.10), 0, 0.35);
+  const yMax = Math.floor(height * (1 - ignoreBottom));
+
+  const ctx = opts.ctx || {};
+  const isPortrait  = !!ctx.isPortrait;
+  const isLandscape = !!ctx.isLandscape;
+
+  let satSum=0, ySum=0, y2Sum=0, warmthSum=0, tealSum=0, shadowCnt=0, wSum=0;
+
+  for(let y=0;y<yMax;y+=step){
+    const row = y * width * 4;
+    for(let x=0;x<width;x+=step){
+      const i = row + x*4;
+      const r8 = data[i], g8 = data[i+1], b8 = data[i+2];
+      const r = r8 / 255, g = g8 / 255, b = b8 / 255;
+
+      const mx = Math.max(r,g,b);
+      const mn = Math.min(r,g,b);
+      const sat = (mx===0) ? 0 : (mx-mn)/mx;
+
+      const yy = 0.2126*r + 0.7152*g + 0.0722*b;
+      if(yy < 0.08) shadowCnt++;
+
+      // region tags
+      const cb = 128 - 0.168736*r8 - 0.331264*g8 + 0.5*b8;
+      const cr = 128 + 0.5*r8 - 0.418688*g8 - 0.081312*b8;
+      const isSkin = (cb >= 77 && cb <= 127 && cr >= 133 && cr <= 173);
+
+      const d = mx - mn;
+      let hDeg = 0;
+      if(d > 1e-6){
+        if(mx === r) hDeg = ((g - b)/d + (g < b ? 6 : 0)) * 60;
+        else if(mx === g) hDeg = ((b - r)/d + 2) * 60;
+        else hDeg = ((r - g)/d + 4) * 60;
+      }
+      const v = mx;
+      const isSky = (hDeg >= 190 && hDeg <= 245 && sat >= 0.18 && v >= 0.22);
+      const isFol = (hDeg >= 70 && hDeg <= 160 && sat >= 0.18 && v >= 0.18);
+
+      // weight base
+      let w = 1.0;
+
+      // ✅ GraySuppress (핵심)
+      // 매우 저채도/무채색(차, 아스팔트) 영향 크게 낮춤
+      if(sat < 0.10) w *= 0.35;
+      if((mx-mn) < 0.05) w *= 0.45;      // 거의 무채색
+      if((mx-mn) < 0.025) w *= 0.30;     // 완전 무채색에 가까움
+
+      // extremes protect
+      if(yy < 0.06 || yy > 0.94) w *= 0.70;
+
+      // region emphasis
+      if(isPortrait){
+        if(isSkin) w *= 2.15;
+        else if(isSky || isFol) w *= 0.85;
+      }else if(isLandscape){
+        if(isSky) w *= 1.85;
+        if(isFol) w *= 1.55;
+        if(isSkin) w *= 0.85;
+      }
+
+      satSum += sat * w;
+      ySum   += yy  * w;
+      y2Sum  += (yy*yy) * w;
+
+      warmthSum += (r - b) * w;
+      tealSum   += (g - (r+b)*0.5) * w;
+
+      wSum += w;
+    }
+  }
+
+  if(wSum <= 1e-6) wSum = 1;
+
+  const satMean = satSum/wSum;
+  const yMean = ySum/wSum;
+  const yVar = Math.max(0, (y2Sum/wSum) - yMean*yMean);
+  const contrast = Math.sqrt(yVar);
+
+  return {
+    sat: satMean,
+    contrast,
+    shadow: shadowCnt / Math.max(1, ((yMax/step) * (width/step))),
+    warmth: warmthSum/wSum,
+    teal: tealSum/wSum,
+    lum: yMean
+  };
+}
+
+function pickByNearestPrototype(stats, opts = {}){
+  const W = {
+    sat: 1.35,
+    contrast: 1.15,
+    shadow: 0.90,
+    warmth: 1.10,
+    teal: 1.00,
+    lum: 0.65,
+    ...(opts.weights || {})
+  };
+
+  const scores = {};
+  let bestKey = null;
+  let bestD = Infinity;
+
+  for(const key of Object.keys(FUJI_GRID_PROTOTYPES)){
+    const p = FUJI_GRID_PROTOTYPES[key];
+    let d =
+      W.sat      * _sq(stats.sat      - p.sat) +
+      W.contrast * _sq(stats.contrast - p.contrast) +
+      W.shadow   * _sq(stats.shadow   - p.shadow) +
+      W.warmth   * _sq(stats.warmth   - p.warmth) +
+      W.teal     * _sq(stats.teal     - p.teal) +
+      W.lum      * _sq(stats.lum      - p.lum);
+
+    // Classic Chrome 오판 방지
+    if(key === "classic_chrome"){
+      if(stats.warmth > 0.03) d += 0.015;
+      if(stats.shadow < 0.07) d += 0.010;
+    }
+
+    scores[key] = d;
+    if(d < bestD){ bestD = d; bestKey = key; }
+  }
+
+  const sorted = Object.entries(scores).sort((a,b)=> a[1]-b[1]);
+  const top3 = sorted.slice(0,3).map(x=>x[0]);
+
+  const d1 = sorted[0]?.[1] ?? 1;
+  const d2 = sorted[1]?.[1] ?? (d1 + 0.02);
+  const gap = Math.max(0, d2 - d1);
+  const conf = clamp(0.45 + gap*18.0, 0.25, 0.95);
+
+  return { bestKey, scores, conf, top3 };
+}
+
+function computeSuggestedStrengthGrid(stats, conf, ctx = {}){
+  const avgS = clamp(stats.sat, 0, 1);
+  const hiHeavy = !!ctx.isHighlightHeavy;
+  const extreme = !!ctx.isExtreme;
+  const portrait = !!ctx.isPortrait;
+  const landscape = !!ctx.isLandscape;
+
+  let strength = 52;
+  strength += (avgS > 0.52 ? 10 : 0);
+  strength += (landscape ? 6 : 0);
+  strength += (portrait ? -2 : 0);
+  strength += (hiHeavy ? -8 : 0);
+  strength += (extreme ? -6 : 0);
+  strength += Math.round((conf - 0.5)*20);
+
+  return clamp(strength, 35, 78);
+}
+
+function recommendFilmSimFromTargetGrid(result, refImageData){
+  const skinR = clamp(result?.skin?.ratio ?? 0, 0, 1);
+  const sky   = clamp(result?.regions?.sky ?? 0, 0, 1);
+  const fol   = clamp(result?.regions?.foliage ?? 0, 0, 1);
+  const expNote = (result?.exposure?.note ?? "Balanced");
+  const hiR = clamp(result?.exposure?.highlightRatio ?? 0, 0, 1);
+  const shR = clamp(result?.exposure?.shadowRatio ?? 0, 0, 1);
+  const tooBright = clamp(result?.tooBrightRatio ?? 0, 0, 1);
+  const tooDark   = clamp(result?.tooDarkRatio ?? 0, 0, 1);
+
+  const aiPortrait = ((result?.aiTypeDetected ?? "") === "portrait");
+
+  // ✅ v11.5.5: ai portrait 단독으로 isPortrait 금지(스킨비율로 재확인)
+  const isPortrait  = (skinR > 0.14) || (aiPortrait && skinR > 0.08);
+  const isLandscape = (sky + fol > 0.55) || ((result?.aiTypeDetected ?? "") === "landscape");
+
+  const isHighlightHeavy = (expNote === "Highlight heavy") || (hiR > 0.33) || (tooBright > 0.28);
+  const isShadowHeavy    = (expNote === "Shadow heavy") || (shR > 0.33) || (tooDark > 0.28);
+  const isExtreme = (expNote === "Extreme contrast") || ((hiR > 0.28) && (shR > 0.28));
+
+  const stats = computeFujiGridStats(refImageData, {
+    sampleStep: 2,
+    ignoreBottomRatio: 0.10,
+    ctx:{isPortrait, isLandscape}
+  });
+
+  let picked = pickByNearestPrototype(stats);
+
+  // 인물 보정(단, isPortrait일 때만)
+  if(isPortrait){
+    const s = picked.scores;
+    if(s.reala_ace != null) s.reala_ace *= 0.92;
+    if(s.astia != null) s.astia *= 0.95;
+    if(s.provia != null) s.provia *= 0.98;
+    if(s.classic_chrome != null) s.classic_chrome *= 1.06;
+
+    const sorted = Object.entries(s).sort((a,b)=> a[1]-b[1]);
+    picked.bestKey = sorted[0][0];
+    picked.top3 = sorted.slice(0,3).map(x=>x[0]);
+
+    const d1 = sorted[0][1], d2 = sorted[1]?.[1] ?? (d1+0.02);
+    const gap = Math.max(0, d2-d1);
+    picked.conf = clamp(0.45 + gap*18.0, 0.25, 0.95);
+  }
+
+  const bestKey = picked.bestKey;
+  const strength = computeSuggestedStrengthGrid(stats, picked.conf, { isPortrait, isLandscape, isHighlightHeavy, isExtreme });
+
+  const reasons = [];
+  if(isPortrait) reasons.push("피부/인물 비중");
+  if(isLandscape) reasons.push("풍경(하늘/초록) 비중");
+  if(isHighlightHeavy) reasons.push("하이라이트 과다");
+  if(isShadowHeavy) reasons.push("암부 과다");
+  if(isExtreme) reasons.push("극단 대비");
+  reasons.push(`grid-match (sat ${Math.round(stats.sat*100)}%)`);
+
+  return {
+    key: bestKey,
+    strength,
+    confidence: picked.conf,
+    top3: picked.top3 || [],
+    reason: reasons.join(" · ")
+  };
+}
+
+function recommendFilmSimFromTarget(res, refImageDataOrNull){
+  if(refImageDataOrNull){
+    try{
+      return recommendFilmSimFromTargetGrid(res, refImageDataOrNull);
+    }catch(e){
+      console.warn("Grid AutoPick fallback:", e);
+    }
+  }
+
+  // fallback heuristic (간단 유지)
   const avgS   = clamp(res?.avgS01 ?? 0.45, 0, 1);
   const sky    = clamp(res?.regions?.sky ?? 0, 0, 1);
   const fol    = clamp(res?.regions?.foliage ?? 0, 0, 1);
@@ -2267,24 +2574,17 @@ function recommendFilmSimFromTarget(res){
   const tooBright= clamp(res?.tooBrightRatio ?? 0, 0, 1);
   const colored = clamp((res?.validColored ?? 0) / 2500, 0, 1);
 
-  const isPortrait = (skinR > 0.14) || ((res?.aiTypeDetected ?? "") === "portrait");
+  const aiPortrait = ((res?.aiTypeDetected ?? "") === "portrait");
+  const isPortrait = (skinR > 0.14) || (aiPortrait && skinR > 0.08);
   const isLandscape = (sky + fol > 0.55) || ((res?.aiTypeDetected ?? "") === "landscape");
+
   const isVivid = (avgS > 0.55) && (colored > 0.35);
   const isLowSat = (avgS < 0.33) || (colored < 0.25);
   const isHighlightHeavy = (expNote === "Highlight heavy") || (hiR > 0.33) || (tooBright > 0.28);
   const isShadowHeavy = (expNote === "Shadow heavy") || (shR > 0.33) || (tooDark > 0.28);
   const isExtreme = (expNote === "Extreme contrast") || ((hiR > 0.28) && (shR > 0.28));
 
-  const sc = {
-    velvia: 0,
-    eterna: 0,
-    classic_chrome: 0,
-    classic_negative: 0,
-    nostalgic_negative: 0,
-    reala_ace: 0,
-    astia: 0,
-    provia: 0,
-  };
+  const sc = { velvia:0, eterna:0, classic_chrome:0, classic_negative:0, nostalgic_negative:0, reala_ace:0, astia:0, provia:0 };
 
   sc.velvia += (isLandscape ? 0.30 : 0.05);
   sc.velvia += scoreClamp01((avgS - 0.45) * 1.6) * 0.35;
@@ -2294,37 +2594,23 @@ function recommendFilmSimFromTarget(res){
   sc.eterna += (isHighlightHeavy ? 0.35 : 0.08);
   sc.eterna += scoreClamp01((0.45 - avgS) * 1.2) * 0.15;
   sc.eterna += (isExtreme ? 0.18 : 0.00);
-  sc.eterna += (isLandscape ? 0.10 : 0.05);
 
   sc.classic_chrome += (isLowSat ? 0.32 : 0.10);
   sc.classic_chrome += (isHighlightHeavy ? 0.14 : 0.06);
-  sc.classic_chrome += scoreClamp01((0.55 - avgS) * 1.3) * 0.18;
-  sc.classic_chrome += (isLandscape ? 0.10 : 0.05);
 
   sc.classic_negative += (isShadowHeavy ? 0.30 : 0.08);
   sc.classic_negative += (isExtreme ? 0.12 : 0.00);
-  sc.classic_negative += scoreClamp01((0.50 - avgS) * 0.9) * 0.10;
 
   sc.nostalgic_negative += (isShadowHeavy ? 0.18 : 0.06);
   sc.nostalgic_negative += (isPortrait ? 0.16 : 0.06);
-  sc.nostalgic_negative += scoreClamp01((0.48 - avgS) * 0.8) * 0.08;
 
   sc.reala_ace += (isPortrait ? 0.34 : 0.10);
-  sc.reala_ace += scoreClamp01((0.55 - Math.abs(avgS - 0.45) * 2.0)) * 0.18;
-  sc.reala_ace += (isHighlightHeavy ? 0.08 : 0.04);
-
   sc.astia += (isPortrait ? 0.30 : 0.06);
-  sc.astia += (isHighlightHeavy ? 0.10 : 0.04);
-  sc.astia += scoreClamp01((0.42 - avgS) * 0.9) * 0.06;
-
   sc.provia += 0.22;
-  sc.provia += (isLandscape ? 0.08 : 0.04);
-  sc.provia += scoreClamp01((0.50 - Math.abs(avgS - 0.42))) * 0.08;
 
   const entries = Object.entries(sc).sort((a,b)=> b[1]-a[1]);
   const [bestKey, bestScore] = entries[0];
   const second = entries[1]?.[1] ?? 0;
-
   let conf = clamp(0.45 + (bestScore - second) * 0.9 + colored * 0.25, 0.25, 0.95);
 
   let strength = 52;
@@ -2334,12 +2620,9 @@ function recommendFilmSimFromTarget(res){
   strength += (isHighlightHeavy ? -8 : 0);
   strength += (isExtreme ? -6 : 0);
   strength += Math.round((conf - 0.5) * 20);
+  strength = clamp(strength, 35, 78);
 
-  if(bestKey === "velvia") strength = clamp(strength, 35, 72);
-  else if(bestKey === "eterna") strength = clamp(strength, 35, 70);
-  else if(bestKey === "classic_negative") strength = clamp(strength, 35, 75);
-  else if(bestKey === "classic_chrome") strength = clamp(strength, 35, 75);
-  else strength = clamp(strength, 35, 78);
+  const top3 = entries.slice(0,3).map(e=>e[0]);
 
   const reasons = [];
   if(isPortrait) reasons.push("피부/인물 비중");
@@ -2349,33 +2632,50 @@ function recommendFilmSimFromTarget(res){
   if(isHighlightHeavy) reasons.push("하이라이트 과다");
   if(isShadowHeavy) reasons.push("암부 과다");
   if(isExtreme) reasons.push("극단 대비");
-
   const reason = (reasons.length ? reasons.join(" · ") : "밸런스") + ` · avgS ${Math.round(avgS*100)}%`;
 
-  return { key: bestKey, strength, confidence: conf, reason };
-}
-function applyAutoSuggestionToUI(sug, modeLabel){
-  if(!sug || !sug.key) return;
-  lastAutoSuggest = sug;
-
-  document.getElementById("fujiPreset").value = sug.key;
-  document.getElementById("presetStrength").value = String(sug.strength);
-
-  updateStrengthLabel();
-  updatePresetLabel();
-  refreshPreviewReady();
-  refreshAutoPickReady();
-
-  if(prevFileState && document.getElementById("previewMode").value === "preset"){
-    queuePreviewRender("presetChange");
-  }
-
-  const msg = `Auto FilmSim 적용: ${presetDisplayName(sug.key)} · ${sug.strength}% (신뢰 ${Math.round(sug.confidence*100)}%) — ${sug.reason}${modeLabel ? (" · "+modeLabel) : ""}`;
-  document.getElementById("autoSuggestText").textContent = msg;
+  return { key: bestKey, strength, confidence: conf, top3, reason };
 }
 
 /* =========================================================
-   Worker call helper
+   Auto Apply policy
+========================================================= */
+const AUTO_APPLY_MIN_CONF = 0.55; // ✅ 이 미만이면 자동 적용하지 않고 Top3 안내
+
+function applyAutoSuggestionToUI(sug, modeLabel, forceApply=false){
+  if(!sug || !sug.key) return;
+  lastAutoSuggest = sug;
+
+  const top3 = (sug.top3||[]).map(k=>presetDisplayName(k)).join(" / ");
+  const t3 = top3 ? ` · Top3: ${top3}` : "";
+
+  const confPct = Math.round((sug.confidence||0)*100);
+  const msgBase = `Auto FilmSim 추천: ${presetDisplayName(sug.key)} · ${sug.strength}% (신뢰 ${confPct}%) — ${sug.reason}${t3}${modeLabel ? (" · "+modeLabel) : ""}`;
+
+  const canAutoApply = forceApply || ((sug.confidence||0) >= AUTO_APPLY_MIN_CONF);
+
+  if(canAutoApply){
+    document.getElementById("fujiPreset").value = sug.key;
+    document.getElementById("presetStrength").value = String(sug.strength);
+    updateStrengthLabel();
+    updatePresetLabel();
+    refreshPreviewReady();
+    refreshAutoPickReady();
+
+    if(prevFileState && document.getElementById("previewMode").value === "preset"){
+      queuePreviewRender("presetChange");
+    }
+    document.getElementById("autoSuggestText").textContent = `✅ ${msgBase}`;
+  }else{
+    // ✅ 신뢰 낮으면 자동 적용 X (유저가 직접 선택하도록 유도)
+    refreshAutoPickReady();
+    document.getElementById("autoSuggestText").textContent =
+      `⚠️ ${msgBase}\n→ 신뢰가 낮아 자동 적용은 보류했습니다. (Top3 중에서 선택해보세요)`;
+  }
+}
+
+/* =========================================================
+   Worker call helper (✅ 복사본만 transfer)
 ========================================================= */
 async function runWorker(refId, origIdOrNull, aiType, stridePx, enableSpecPoints){
   initWorker();
@@ -2389,9 +2689,13 @@ async function runWorker(refId, origIdOrNull, aiType, stridePx, enableSpecPoints
     worker.addEventListener("message", onMsg);
     worker.addEventListener("error", onErr);
 
-    const refBuf = refId.data.buffer;
+    const refCopy = new Uint8ClampedArray(refId.data);
+    const refBuf = refCopy.buffer;
+
     if(origIdOrNull){
-      const origBuf = origIdOrNull.data.buffer;
+      const origCopy = new Uint8ClampedArray(origIdOrNull.data);
+      const origBuf = origCopy.buffer;
+
       worker.postMessage(
         { origBuf, refBuf, hasOrig:true, aiType, mode:userMode, stridePx, enableSpecPoints },
         [origBuf, refBuf]
@@ -2427,6 +2731,7 @@ async function analyzeAll(){
     const enableSpecPoints = (document.getElementById("specPoints").value === "on");
 
     const refCanvas0 = await fileToOrientedCanvas(refFileState, maxDim);
+
     const wc = document.getElementById("workCanvas");
     const ctx = wc.getContext("2d", {willReadFrequently:true});
 
@@ -2466,17 +2771,65 @@ async function analyzeAll(){
       refId = ctx.getImageData(0,0,wc.width,wc.height);
     }
 
-    // AI detect (optional)
+    // ------------------------------------------------------
+    // AI detect (optional) - ✅ FaceGate + 320px
+    // ------------------------------------------------------
     let aiType = "fallback";
     let aiNote = "-";
+    let aiSkinRatio = 0;
+
     if(userMode === "auto"){
       await ensureAIModelsLoaded();
       await ensureCocoLoadedIfNeeded();
+
       try{
-        const faces = faceModel ? await faceModel.estimateFaces(wc, false) : [];
-        if(faces && faces.length>0){ aiType="portrait"; aiNote="AI: 얼굴 감지"; }
-        else{
-          const preds = classifyModel ? await classifyModel.classify(wc) : [];
+        const aiC = document.getElementById("aiCanvas");
+        const aictx = aiC.getContext("2d", {willReadFrequently:false});
+        const maxAI = 320;
+        const scale = Math.min(1, maxAI / Math.max(wc.width, wc.height));
+        aiC.width = Math.max(1, Math.round(wc.width * scale));
+        aiC.height = Math.max(1, Math.round(wc.height * scale));
+        aictx.setTransform(1,0,0,1,0,0);
+        aictx.imageSmoothingEnabled = true;
+        aictx.imageSmoothingQuality = "high";
+        aictx.clearRect(0,0,aiC.width, aiC.height);
+        aictx.drawImage(wc, 0,0, aiC.width, aiC.height);
+
+        // ✅ 스킨비율(빠름) - 얼굴 오판 차단용
+        const aiImg = aictx.getImageData(0,0,aiC.width, aiC.height);
+        aiSkinRatio = estimateSkinRatioFromImageData(aiImg, 3);
+
+        // ✅ 얼굴 오판 게이트
+        let goodFace = false;
+        if(faceModel){
+          const faces = await faceModel.estimateFaces(aiC, false) || [];
+          const minFacePx = Math.round(Math.min(aiC.width, aiC.height) * 0.14); // 좀 더 엄격
+          for(const f of faces){
+            let bw=0,bh=0;
+            if(f.topLeft && f.bottomRight){
+              bw = Math.abs(f.bottomRight[0]-f.topLeft[0]);
+              bh = Math.abs(f.bottomRight[1]-f.topLeft[1]);
+            }else if(f.box){
+              bw = f.box[2]; bh = f.box[3];
+            }
+            const sizeOK = (bw >= minFacePx && bh >= minFacePx);
+
+            // probability가 있으면 엄격, 없으면 sizeOK만 사용
+            const prob = (f.probability && f.probability[0] != null) ? f.probability[0] : null;
+            const probOK = (prob == null) ? true : (prob >= 0.90);
+
+            // ✅ 피부가 거의 없으면 얼굴 판정 무효
+            const skinOK = (aiSkinRatio >= 0.08);
+
+            if(sizeOK && probOK && skinOK){ goodFace = true; break; }
+          }
+        }
+
+        if(goodFace){
+          aiType="portrait";
+          aiNote=`AI: 얼굴(게이트 통과) · skin ${Math.round(aiSkinRatio*100)}%`;
+        }else{
+          const preds = classifyModel ? await classifyModel.classify(aiC) : [];
           const lsKw = ['mountain','valley','ocean','sea','beach','tree','forest','sky','nature','landscape','lake','park'];
           const isLandscape = preds?.some(p => lsKw.some(kw => (p.className||"").toLowerCase().includes(kw)));
           if(isLandscape){ aiType="landscape"; aiNote="AI: 풍경"; }
@@ -2487,14 +2840,20 @@ async function analyzeAll(){
       }
     }
 
+    // ------------------------------------------------------
+    // Worker analyze
+    // ------------------------------------------------------
     const result = await runWorker(refId, origId, aiType, stridePx, enableSpecPoints);
     if(!result || !result.ok) throw new Error("Worker result invalid");
 
-    // Auto FilmSim apply if ON + 1-shot
+    // ------------------------------------------------------
+    // Auto FilmSim apply if ON + 1-shot (Grid-first)
+    // ------------------------------------------------------
     const autoOn = (document.getElementById("autoFilmSim").value === "on");
     if(autoOn && shotMode === "one"){
-      const sug = recommendFilmSimFromTarget({ ...result, aiTypeDetected: aiType });
-      applyAutoSuggestionToUI(sug, "AutoFilmSim");
+      const sug = recommendFilmSimFromTarget({ ...result, aiTypeDetected: aiType }, refId);
+      // ✅ 신뢰 낮으면 자동 적용 보류 + Top3 안내
+      applyAutoSuggestionToUI(sug, "AutoFilmSim(Grid)", false);
     }
 
     // PSE guard
@@ -2570,13 +2929,17 @@ async function analyzeAll(){
     document.getElementById("sumColors").textContent = axesTxt;
 
     const autoLine = (lastAutoSuggest && shotMode==="one")
-      ? `Auto FilmSim: ${presetDisplayName(lastAutoSuggest.key)} ${lastAutoSuggest.strength}% (conf ${Math.round(lastAutoSuggest.confidence*100)}%)`
+      ? `Auto FilmSim: ${presetDisplayName(lastAutoSuggest.key)} ${lastAutoSuggest.strength}% (conf ${Math.round((lastAutoSuggest.confidence||0)*100)}%)`
       : `Auto FilmSim: -`;
+
+    const t3Line = (lastAutoSuggest?.top3?.length)
+      ? `Top3: ${lastAutoSuggest.top3.map(k=>presetDisplayName(k)).join(" / ")}`
+      : "";
 
     document.getElementById("sumExtra").textContent =
       `Skin ${Math.round((skin.ratio||0)*100)}% · Regions Sky ${Math.round((reg.sky||0)*100)}% / Fol ${Math.round((reg.foliage||0)*100)}% · ` +
       `Exposure: ${exp.note} (Hi ${Math.round((exp.highlightRatio||0)*100)}%, Sh ${Math.round((exp.shadowRatio||0)*100)}%)\n` +
-      `${autoLine}`;
+      `${autoLine}${t3Line?("\n"+t3Line):""}`;
 
     // lastRecipe for preview recipe mode
     lastRecipe = {
@@ -2602,7 +2965,7 @@ async function analyzeAll(){
     }
 
     summaryText =
-`[Canon Recipe Generator Pro v11.5.2]
+`[Canon Recipe Generator Pro v11.5.5]
 - Mode: ${modeLabel}
 - Look Overlay: ${(presetKey==="off"||strength01===0)?"OFF":(FUJI_PRESETS[presetKey].name+" ("+Math.round(strength01*100)+"%)")}
 - Base: ${lastRecipe.baseHint}
@@ -2610,6 +2973,7 @@ async function analyzeAll(){
 - WB: ${wbText} (Rel ${wbRel})
 - Regions: Sky ${Math.round((reg.sky||0)*100)}% / Fol ${Math.round((reg.foliage||0)*100)}%
 - ${autoLine}
+${t3Line ? ("- "+t3Line) : ""}
 
 [Curve]
 ${curveTxt}
@@ -2620,12 +2984,13 @@ ${axesTxt}
 
     fullText =
 `==================================================
- Canon Recipe Generator Pro v11.5.2 (EV AfterOnly)
+ Canon Recipe Generator Pro v11.5.5 (AutoFix)
 ==================================================
 Shot: ${shotMode==="one"?"1-shot(target)":"2-shot(orig+target)"}
 Mode: ${modeName(userMode)}${(userMode==="auto") ? (" / "+aiNote) : ""}
 Look Overlay: ${(presetKey==="off"||strength01===0)?"OFF":(FUJI_PRESETS[presetKey].name+" ("+Math.round(strength01*100)+"%)")}
 ${autoLine}
+${t3Line}
 
 [WB]
 - ${wbText} (Rel ${wbRel})
@@ -2672,7 +3037,7 @@ ${(finalRes.axes||[]).map(a=>{
 }
 
 /* =========================================================
-   Manual Auto-Pick
+   Manual Auto-Pick (버튼은 "강제 적용"으로 동작)
 ========================================================= */
 async function autoPickFromTargetNow(){
   if(!refFileState){ alert("타겟 사진이 필요합니다."); return; }
@@ -2696,8 +3061,9 @@ async function autoPickFromTargetNow(){
     const res = await runWorker(refId, null, "fallback", stridePx, false);
     if(!res || !res.ok) throw new Error("AutoPick worker fail");
 
-    const sug = recommendFilmSimFromTarget({ ...res, aiTypeDetected: "fallback" });
-    applyAutoSuggestionToUI(sug, "ManualPick");
+    const sug = recommendFilmSimFromTarget({ ...res, aiTypeDetected: "fallback" }, refId);
+    // ✅ 버튼은 유저 의지 → 신뢰 낮아도 적용(강제)
+    applyAutoSuggestionToUI(sug, "ManualPick(Grid)", true);
 
   }catch(err){
     console.error(err);
@@ -2799,11 +3165,6 @@ document.getElementById("autoFilmSim").addEventListener("change", ()=>{
 document.getElementById("btnAutoPick").addEventListener("click", ()=>{
   autoPickFromTargetNow();
 });
-
-/* =========================================================
-   Preview: Save / Ready
-========================================================= */
-document.getElementById("btnPreviewSave").addEventListener("click", ()=> savePreviewPNG());
 
 /* =========================================================
    Boot
