@@ -3,9 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
-  <title>Canon Recipe Generator Pro (v11.1.1 PSE-HSLGuard + SpecificPoints HOTFIX)</title>
+  <title>Canon Recipe Generator Pro (v11.4 ClassicNeg Matrix)</title>
 
-  <!-- AI (지연 로딩) -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface@0.0.7/dist/blazeface.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.0/dist/mobilenet.min.js"></script>
@@ -26,7 +25,7 @@
       padding: 16px;
       line-height: 1.5;
     }
-    .app{ max-width: 1020px; margin: 0 auto; padding-bottom: 48px; }
+    .app{ max-width: 1120px; margin: 0 auto; padding-bottom: 48px; }
     .header{ display:flex; flex-direction:column; gap:10px; margin-bottom:18px; }
     .title h1{ margin:0; font-size:20px; letter-spacing:-0.4px; }
     .title p{ margin:6px 0 0; color:var(--muted); font-size:13px; word-break: keep-all; }
@@ -41,7 +40,7 @@
     .dot.ok{ background:var(--ok); } .dot.warn{ background:var(--warn); }
 
     .grid{ display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
-    @media (max-width: 860px){ .grid{ grid-template-columns:1fr; } }
+    @media (max-width: 920px){ .grid{ grid-template-columns:1fr; } }
 
     .card{
       background: rgba(18,26,51,0.86);
@@ -265,7 +264,45 @@
     }
     @keyframes spin{ to{ transform: rotate(360deg);} }
     .hide{ display:none !important; }
-    canvas{ display:none; }
+
+    /* Preview */
+    .pvWrap{ display:flex; flex-direction:column; gap:12px; }
+    #previewCanvas{
+      width:100%;
+      display:block;
+      border-radius:14px;
+      border:1px solid var(--line);
+      background: rgba(2,6,23,0.25);
+      max-height: 520px;
+      touch-action: none;
+      cursor: ew-resize;
+    }
+    .pvLegend{
+      display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;
+      color:var(--muted); font-size:12px; font-weight:900;
+    }
+    .pvLegend b{ color: var(--text); }
+    .pvHint{
+      color:var(--muted);
+      font-size:12px;
+      font-weight:900;
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      align-items:center;
+      justify-content:space-between;
+    }
+    .pvHint .badge2{
+      border:1px solid var(--line);
+      background: rgba(18,26,51,0.7);
+      padding:6px 10px;
+      border-radius:999px;
+      font-size:11px;
+      font-weight:950;
+      color: var(--cyan);
+    }
+    .pvActions{ display:flex; gap:10px; flex-wrap:wrap; }
+    .pvActions .btn{ width:auto; padding:10px 12px; font-size:12px; border-radius:12px; }
   </style>
 </head>
 
@@ -273,21 +310,100 @@
   <div class="app">
     <div class="header">
       <div class="title">
-        <h1>📷 Canon Recipe Generator Pro <span style="color:var(--cyan); font-size:14px;">v11.1.1 HOTFIX</span></h1>
+        <h1>📷 Canon Recipe Generator Pro <span style="color:var(--cyan); font-size:14px;">v11.4 ClassicNeg Matrix</span></h1>
         <p>
-          ✅ <b>PSE HSL Guard</b> · ✅ <b>Specific Points 생성 로직 안정화</b><br/>
-          v11.1.1: 포인트가 0개로 떨어지는 문제를 해결하기 위해 <b>임계값 자동 완화 + 글로벌 백업 포인트</b> + <b>0개 사유 표시</b>를 추가했습니다.
+          ✅ <b>Classic Negative: ToneCurve + RGB Cross-talk + HSL 변환 매트릭스</b> 적용(프리뷰 품질↑)<br/>
+          ✅ 분석 결과(PSE 6축)는 그대로 유지 + <b>프리뷰에서만</b> ClassicNeg “필름식 크로스타크/색틀어짐”을 추가로 구현합니다.
         </p>
       </div>
       <div class="badges">
         <div class="badge"><span id="dotAI" class="dot warn"></span><span id="aiText">AI 미로딩 (자동 시 분석 때 로딩)</span></div>
+        <div class="badge"><span id="dotP" class="dot"></span> 미리보기(선택)</div>
         <div class="badge"><span id="dotO" class="dot"></span> 원본(선택)</div>
         <div class="badge"><span id="dotR" class="dot"></span> 타겟(필수)</div>
       </div>
     </div>
 
     <div class="grid">
-      <!-- STEP 1 -->
+
+      <!-- Preview -->
+      <div class="card" style="grid-column: 1 / -1;">
+        <div class="card-h">
+          <strong>PREVIEW. 내 캐논 사진에 적용해보기</strong>
+          <span class="step">드래그 Split</span>
+        </div>
+        <div class="card-b">
+          <div class="pvWrap">
+            <div class="seg">
+              <div class="label">미리보기 사진(내 캐논 JPG)</div>
+              <div class="uploader">
+                <div class="drop" id="dropPrev">
+                  <div class="label">미리보기 사진 업로드</div>
+                  <div class="hint">프리셋/레시피를 적용해 Before/After를 확인합니다.</div>
+                  <input id="prevFile" type="file" accept="image/*"/>
+                  <img id="thumbPrev" class="thumb" alt="preview"/>
+                  <div id="filePrev" class="filename"></div>
+                </div>
+              </div>
+
+              <div class="mini" style="margin-top:12px;">
+                ✅ <b>Split 조절:</b> 아래 프리뷰 이미지 위에서 좌우로 <b>드래그</b>하세요.<br/>
+                (좌: 원본 / 우: 적용 결과)
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="kv">
+                <b>미리보기 소스</b>
+                <select id="previewMode">
+                  <option value="preset" selected>프리셋만 적용(빠름)</option>
+                  <option value="recipe">마지막 분석 레시피 적용(정밀)</option>
+                </select>
+                <span class="val" id="previewModeLabel">PRESET</span>
+              </div>
+              <div class="kv">
+                <b>미리보기 해상도</b>
+                <select id="previewDim">
+                  <option value="720">720px (최고속)</option>
+                  <option value="1024" selected>1024px (권장)</option>
+                  <option value="1280">1280px (정밀)</option>
+                </select>
+                <span class="val">Render</span>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="kv">
+                <b>적용 강도</b>
+                <input id="previewStrength" type="range" min="0" max="100" value="70" />
+                <span class="val" id="previewStrengthLabel">70%</span>
+              </div>
+              <div class="kv">
+                <b>Split 위치</b>
+                <span class="val" id="splitLabel">50%</span>
+                <span class="val" style="color:var(--muted); font-weight:900;">(드래그)</span>
+              </div>
+            </div>
+
+            <div class="pvHint">
+              <div class="badge2" id="pvMeta">-</div>
+              <div class="pvActions">
+                <button id="btnPreviewApply" class="btn ghost" disabled>👁️ 미리보기 업데이트</button>
+                <button id="btnPreviewReset" class="btn ghost" disabled>↔️ Split 50%</button>
+                <button id="btnPreviewSave" class="btn ghost" disabled>⬇️ PNG 저장</button>
+              </div>
+            </div>
+
+            <canvas id="previewCanvas"></canvas>
+            <div class="pvLegend">
+              <div>좌측 <b>원본</b></div>
+              <div>우측 <b>적용 결과</b></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 1 -->
       <div class="card">
         <div class="card-h">
           <strong>STEP 1. 사진 넣기</strong>
@@ -324,12 +440,12 @@
           </div>
 
           <div class="mini" style="margin-top:12px;">
-            <b>Specific Points</b>는 <b>2장 모드</b>에서 가장 잘 생성됩니다. (원본/타겟이 “비슷한 장면”일수록 좋음)
+            2장 모드가 “진짜 매칭”입니다. (가능하면 2장 추천)
           </div>
         </div>
       </div>
 
-      <!-- STEP 2 -->
+      <!-- Step 2 -->
       <div class="card">
         <div class="card-h">
           <strong>STEP 2. 설정</strong>
@@ -387,7 +503,7 @@
                 <option value="off" selected>Off (분석만)</option>
                 <optgroup label="Fuji 5th Gen Looks">
                   <option value="classic_chrome">Fuji_ClassicChrome</option>
-                  <option value="classic_negative">Fuji_ClassicNegative</option>
+                  <option value="classic_negative">Fuji_ClassicNegative (Matrix/HSL 적용)</option>
                   <option value="reala_ace">Fuji_RealaAce</option>
                   <option value="nostalgic_negative">Fuji_NostalgicNeg</option>
                   <option value="provia">Fuji_Provia</option>
@@ -406,8 +522,7 @@
           <div class="row">
             <div class="kv">
               <b>프리셋 강도</b>
-              <input id="presetStrength" type="range" min="0" max="100" value="50"
-                     oninput="updateStrengthLabel(); updatePresetLabel(); refreshReady();"/>
+              <input id="presetStrength" type="range" min="0" max="100" value="50" />
               <span class="val" id="strengthLabel">50%</span>
             </div>
           </div>
@@ -418,12 +533,13 @@
           </button>
 
           <div class="mini" style="margin-top:12px;">
-            포인트가 안 뜨면: <b>2장 모드 + 1280</b>로 먼저 확인하세요. (v11.1.1은 그래도 뜨게 만들었습니다 😎)
+            ⚠️ <b>Classic Negative Matrix/HSL</b>는 Canon PSE에 직접 입력 불가한 “필름식 처리”이므로, <b>프리뷰 정확도</b>를 위해 앱 내부 렌더에서만 적용합니다.<br/>
+            (분석 결과 레시피는 PSE 6축/커브로 최대한 근사합니다.)
           </div>
         </div>
       </div>
 
-      <!-- STEP 3 -->
+      <!-- Step 3 -->
       <div class="card hide" style="grid-column: 1 / -1;" id="resultCard">
         <div class="card-h">
           <strong>STEP 3. 결과</strong>
@@ -507,9 +623,10 @@
             <div id="reportBox" class="report"></div>
           </div>
 
-          <canvas id="canvas"></canvas>
+          <canvas id="workCanvas" class="hide"></canvas>
         </div>
       </div>
+
     </div>
   </div>
 
@@ -523,39 +640,152 @@ let viewTab  = "sum";
 
 let origFileState = null;
 let refFileState  = null;
+let prevFileState = null;
 
 let summaryText = "";
 let fullText = "";
 
-// Worker lifecycle
+let lastRecipe = null;
+
 let worker = null;
 let workerUrl = null;
 
-// Lazy AI
 let faceModel = null;
 let classifyModel = null;
 let cocoModel = null;
 let aiState = "idle";
 let aiStatusText = "AI 미로딩 (자동 시 분석 때 로딩)";
 
+let split01 = 0.50;
+let previewCache = null;
+let previewBusy = false;
+
 /* =========================================================
-   Presets (동일)
+   Classic Negative (공식식 기반 프리뷰 전용 FX)
+   - ToneCurve LUT: [0,64,128,192,255] -> [10,45,125,205,240]
+   - RGB Cross-talk matrix
+   - Global sat mul (HSV S * 0.85 근사)
+   - HSL Delta matrix (지역별 ΔH/ΔS/ΔL)
 ========================================================= */
-const FUJI_PRESETS = {
-  off: null,
-  provia: { name:"Fuji_Provia", base:"표준 (Standard)", contrast:+1, sat:+1, tone:0, curve5:{0:2,64:66,128:128,192:194,255:252}, axes:{ R:{H:0,S:0,L:0},Y:{H:0,S:0,L:0},G:{H:0,S:0,L:0},C:{H:0,S:0,L:0},B:{H:0,S:-2,L:0},M:{H:0,S:0,L:0} } },
-  astia:  { name:"Fuji_Astia",  base:"인물사진 (Portrait)", contrast:-1, sat:+1, tone:+1, curve5:{0:8,64:78,128:132,192:198,255:255}, axes:{ R:{H:+2,S:-6,L:+6},Y:{H:-2,S:-6,L:+6},G:{H:0,S:0,L:0},C:{H:0,S:0,L:0},B:{H:0,S:-6,L:0},M:{H:0,S:0,L:0} } },
-  classic_chrome: { name:"Fuji_ClassicChrome", base:"뉴트럴 (Neutral) 또는 상세 (Fine Detail)", contrast:+2, sat:-3, tone:-1, curve5:{0:12,64:72,128:126,192:186,255:242}, axes:{ R:{H:+2,S:-10,L:+4}, Y:{H:-2,S:-18,L:+4}, G:{H:+4,S:-12,L:-2}, C:{H:-6,S:-8,L:-2}, B:{H:-8,S:-12,L:-4}, M:{H:+2,S:-6,L:0} } },
-  classic_negative: { name:"Fuji_ClassicNegative", base:"뉴트럴 (Neutral)", contrast:+3, sat:-2, tone:-2, curve5:{0:16,64:82,128:128,192:176,255:236}, axes:{ R:{H:-6,S:-12,L:+6}, Y:{H:-8,S:-22,L:+8}, G:{H:+10,S:+4,L:-8}, C:{H:+6,S:+6,L:-8}, B:{H:+4,S:-14,L:-8}, M:{H:+4,S:-8,L:0} } },
-  reala_ace: { name:"Fuji_RealaAce", base:"표준 (Standard) / 인물사진 (Portrait)", skinProtect:true, contrast:+2, sat:+1, tone:+1, curve5:{0:4,64:68,128:130,192:200,255:248}, axes:{ R:{H:0,S:-4,L:+3}, Y:{H:0,S:-6,L:+3}, G:{H:0,S:-2,L:0}, C:{H:+2,S:0,L:-2}, B:{H:+2,S:-2,L:-4}, M:{H:0,S:-2,L:0} } },
-  nostalgic_negative: { name:"Fuji_NostalgicNeg", base:"인물사진 (Portrait)", contrast:+1, sat:-1, tone:+2, curve5:{0:14,64:84,128:136,192:194,255:244}, axes:{ R:{H:-4,S:+2,L:+6},Y:{H:-6,S:+4,L:+8},G:{H:+4,S:-8,L:0},C:{H:+6,S:-8,L:-2},B:{H:+8,S:-12,L:-4},M:{H:0,S:-4,L:0} } },
-  velvia: { name:"Fuji_Velvia", base:"풍경사진 (Landscape)", contrast:+3, sat:+4, tone:-1, curve5:{0:0,64:56,128:126,192:210,255:255}, axes:{ R:{H:0,S:+6,L:0},Y:{H:0,S:+10,L:+2},G:{H:-6,S:+18,L:-6},C:{H:-2,S:+12,L:-6},B:{H:-4,S:+10,L:-8},M:{H:0,S:+4,L:0} } },
-  eterna: { name:"Fuji_Eterna", base:"뉴트럴 (Neutral)", contrast:-2, sat:-3, tone:-1, curve5:{0:16,64:88,128:132,192:180,255:238}, axes:{ R:{H:0,S:-10,L:+2},Y:{H:0,S:-12,L:+2},G:{H:0,S:-8,L:0},C:{H:+2,S:-8,L:0},B:{H:+2,S:-8,L:0},M:{H:0,S:-8,L:0} } },
-  gr_positive: { name:"GR_Positive", base:"표준 (Standard)", contrast:+2, sat:+2, tone:0, curve5:{0:0,64:60,128:132,192:198,255:252}, axes:{ R:{H:0,S:+8,L:0},Y:{H:-2,S:+6,L:+2},G:{H:-6,S:+2,L:-6},C:{H:+2,S:+6,L:-4},B:{H:-4,S:+10,L:-8},M:{H:0,S:0,L:0} } }
+const CN_FORMULA = {
+  curve5: {0:10, 64:45, 128:125, 192:205, 255:240},
+  rgbMatrix: [
+    [ 1.05, -0.10,  0.05],
+    [ 0.00,  0.90,  0.10],
+    [-0.05,  0.15,  0.90],
+  ],
+  satMul: 0.85,
+  // ΔH degree, ΔS%, ΔL%  (S/L are ratio-based)
+  hslRegions: [
+    {name:"Red",          h0:340, h1:360, dH:+5,  dS:-0.15, dL:-0.05},
+    {name:"Red",          h0:0,   h1:20,  dH:+5,  dS:-0.15, dL:-0.05},
+    {name:"OrangeSkin",   h0:20,  h1:45,  dH:-2,  dS:-0.10, dL: 0.00},
+    {name:"Green",        h0:80,  h1:150, dH:+18, dS:-0.25, dL:-0.15},
+    {name:"Blue",         h0:210, h1:280, dH:-10, dS:-0.10, dL:-0.10},
+  ]
 };
 
 /* =========================================================
-   UI helpers
+   Presets
+   - NOTE: Classic Negative는 “PSE 근사값 + (프리뷰 전용 FX)”를 동시에 운용
+========================================================= */
+const FUJI_PRESETS = {
+  off: null,
+
+  provia: {
+    name:"Fuji_Provia",
+    contrast:+1, sat:+1, tone:0,
+    curve5:{0:2,64:66,128:128,192:194,255:252},
+    axes:{ R:{H:0,S:0,L:0},Y:{H:0,S:0,L:0},G:{H:0,S:0,L:0},C:{H:0,S:0,L:0},B:{H:0,S:-2,L:0},M:{H:0,S:0,L:0} }
+  },
+
+  astia:  {
+    name:"Fuji_Astia",
+    contrast:-1, sat:+1, tone:+1,
+    curve5:{0:8,64:78,128:132,192:198,255:255},
+    axes:{ R:{H:+2,S:-6,L:+6},Y:{H:-2,S:-6,L:+6},G:{H:0,S:0,L:0},C:{H:0,S:0,L:0},B:{H:0,S:-6,L:0},M:{H:0,S:0,L:0} }
+  },
+
+  // Classic Chrome (구분 유지)
+  classic_chrome: {
+    name: "Fuji_ClassicChrome",
+    contrast: +2,
+    sat: -2,
+    tone: -1,
+    curve5: {0:12, 64:74, 128:126, 192:184, 255:242},
+    axes:{
+      R:{H:+2,  S:-8,  L:+3},
+      Y:{H:-2,  S:-14, L:+3},
+      G:{H:+4,  S:-10, L:-2},
+      C:{H:-6,  S:-6,  L:-2},
+      B:{H:-8,  S:-10, L:-4},
+      M:{H:+2,  S:-12, L: 0},
+    }
+  },
+
+  // Classic Negative (PSE 근사 + 프리뷰 FX 탑재)
+  classic_negative: {
+    name: "Fuji_ClassicNegative",
+    contrast: +3,
+    sat: -1,
+    tone: -2,
+    // ✅ ToneCurve를 공식식 LUT로 맞춤
+    curve5: CN_FORMULA.curve5,
+    axes:{
+      R:{H:-4,  S:-6,  L:+6},
+      Y:{H:-6,  S:-10, L:+8},
+      G:{H:+10, S:+6,  L:-10},
+      C:{H:+8,  S:+10, L:-10},
+      B:{H:-4,  S:-6,  L:-10},
+      M:{H:+6,  S:-10, L:+2},
+    },
+    // ✅ 프리뷰 전용 FX
+    previewFx: {
+      rgbMatrix: CN_FORMULA.rgbMatrix,
+      satMul: CN_FORMULA.satMul,
+      hslRegions: CN_FORMULA.hslRegions
+    }
+  },
+
+  reala_ace: {
+    name:"Fuji_RealaAce",
+    skinProtect:true,
+    contrast:+2, sat:+1, tone:+1,
+    curve5:{0:4,64:68,128:130,192:200,255:248},
+    axes:{ R:{H:0,S:-4,L:+3}, Y:{H:0,S:-6,L:+3}, G:{H:0,S:-2,L:0}, C:{H:+2,S:0,L:-2}, B:{H:+2,S:-2,L:-4}, M:{H:0,S:-2,L:0} }
+  },
+
+  nostalgic_negative: {
+    name:"Fuji_NostalgicNeg",
+    contrast:+1, sat:-1, tone:+2,
+    curve5:{0:14,64:84,128:136,192:194,255:244},
+    axes:{ R:{H:-4,S:+2,L:+6},Y:{H:-6,S:+4,L:+8},G:{H:+4,S:-8,L:0},C:{H:+6,S:-8,L:-2},B:{H:+8,S:-12,L:-4},M:{H:0,S:-4,L:0} }
+  },
+
+  velvia: {
+    name:"Fuji_Velvia",
+    contrast:+3, sat:+4, tone:-1,
+    curve5:{0:0,64:56,128:126,192:210,255:255},
+    axes:{ R:{H:0,S:+6,L:0},Y:{H:0,S:+10,L:+2},G:{H:-6,S:+18,L:-6},C:{H:-2,S:+12,L:-6},B:{H:-4,S:+10,L:-8},M:{H:0,S:+4,L:0} }
+  },
+
+  eterna: {
+    name:"Fuji_Eterna",
+    contrast:-2, sat:-3, tone:-1,
+    curve5:{0:16,64:88,128:132,192:180,255:238},
+    axes:{ R:{H:0,S:-10,L:+2},Y:{H:0,S:-12,L:+2},G:{H:0,S:-8,L:0},C:{H:+2,S:-8,L:0},B:{H:+2,S:-8,L:0},M:{H:0,S:-8,L:0} }
+  },
+
+  gr_positive: {
+    name:"GR_Positive",
+    contrast:+2, sat:+2, tone:0,
+    curve5:{0:0,64:60,128:132,192:198,255:252},
+    axes:{ R:{H:0,S:+8,L:0},Y:{H:-2,S:+6,L:+2},G:{H:-6,S:+2,L:-6},C:{H:+2,S:+6,L:-4},B:{H:-4,S:+10,L:-8},M:{H:0,S:0,L:0} }
+  }
+};
+
+/* =========================================================
+   Utils
 ========================================================= */
 function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
 function lerp(a,b,t){ return a+(b-a)*t; }
@@ -571,6 +801,10 @@ function modeName(mode){
   if(mode==="night") return "야경";
   return "수동";
 }
+
+/* =========================================================
+   Tabs / Shot / Mode
+========================================================= */
 function setTab(tab){
   viewTab = tab;
   document.querySelectorAll(".tab").forEach(el=> el.classList.toggle("active", el.dataset.tab === tab));
@@ -597,6 +831,9 @@ function setShot(mode){
   refreshReady();
 }
 
+/* =========================================================
+   Preset label
+========================================================= */
 function updateStrengthLabel(){
   const v = parseInt(document.getElementById("presetStrength").value, 10);
   document.getElementById("strengthLabel").textContent = v + "%";
@@ -616,19 +853,41 @@ function updatePresetLabel(){
   }
   setStrengthEnabled(true);
   const name = FUJI_PRESETS[key]?.name || "LookPreset";
-  const extra = FUJI_PRESETS[key]?.skinProtect ? " · SkinSafe" : "";
+  const extra = (key==="classic_negative") ? " · MatrixFX" : (FUJI_PRESETS[key]?.skinProtect ? " · SkinSafe" : "");
   document.getElementById("presetLabel").textContent = `ON: ${name}${extra} (${strength}%)`;
 }
-document.getElementById("fujiPreset").addEventListener("change", ()=>{ updatePresetLabel(); refreshReady(); });
 
-document.getElementById("aiBoost").addEventListener("change", ()=>{
-  const v = document.getElementById("aiBoost").value;
-  document.getElementById("aiBoostLabel").textContent = (v==="coco") ? "ACCURACY" : "FAST";
-});
-document.getElementById("specPoints").addEventListener("change", ()=>{
-  const v = document.getElementById("specPoints").value;
-  document.getElementById("specPointsLabel").textContent = (v==="on") ? "ON" : "OFF";
-});
+/* =========================================================
+   Preview labels / readiness
+========================================================= */
+function updatePreviewLabels(){
+  document.getElementById("splitLabel").textContent = Math.round(split01*100) + "%";
+  const st = parseInt(document.getElementById("previewStrength").value,10);
+  document.getElementById("previewStrengthLabel").textContent = st + "%";
+  const pm = document.getElementById("previewMode").value;
+  document.getElementById("previewModeLabel").textContent = (pm==="preset") ? "PRESET" : "RECIPE";
+}
+function refreshPreviewReady(){
+  const btn = document.getElementById("btnPreviewApply");
+  const btnReset = document.getElementById("btnPreviewReset");
+  const btnSave = document.getElementById("btnPreviewSave");
+
+  const okPrev = !!prevFileState;
+  const pm = document.getElementById("previewMode").value;
+  const okRecipe = (pm==="recipe") ? !!lastRecipe : true;
+
+  btn.disabled = !(okPrev && okRecipe);
+  btnReset.disabled = !okPrev;
+  btnSave.disabled = !okPrev;
+
+  setDot("dotP", okPrev ? "ok" : "");
+  if(pm==="recipe" && okPrev && !okRecipe){
+    setPvMeta("레시피 없음(먼저 분석하세요)");
+  }
+}
+function setPvMeta(t){
+  document.getElementById("pvMeta").textContent = t || "-";
+}
 
 /* =========================================================
    HEIC / EXIF
@@ -668,9 +927,7 @@ async function getExifOrientation(file){
       if(marker === 0xE1){
         const start = offset + 2;
         if(start + 6 <= length){
-          const isExif =
-            view.getUint8(start+0)===0x45 && view.getUint8(start+1)===0x78 &&
-            view.getUint8(start+2)===0x69 && view.getUint8(start+3)===0x66;
+          const isExif = view.getUint8(start+0)===0x45 && view.getUint8(start+1)===0x78 && view.getUint8(start+2)===0x69 && view.getUint8(start+3)===0x66;
           if(isExif){
             const tiff = start + 6;
             const endian = view.getUint16(tiff, false);
@@ -718,8 +975,10 @@ function setupDropZone(dropId, inputId, thumbId, nameId, onSetFile){
     if(f){
       maybeWarnHeic(f);
       onSetFile(f);
-      updatePreview(f, thumb, nameEl);
+      updatePreviewThumb(f, thumb, nameEl);
       refreshReady();
+      refreshPreviewReady();
+      if(dropId==="dropPrev") queuePreviewRender("upload");
     }
   });
   input.addEventListener("change", ()=>{
@@ -727,12 +986,14 @@ function setupDropZone(dropId, inputId, thumbId, nameId, onSetFile){
     if(f){
       maybeWarnHeic(f);
       onSetFile(f);
-      updatePreview(f, thumb, nameEl);
+      updatePreviewThumb(f, thumb, nameEl);
       refreshReady();
+      refreshPreviewReady();
+      if(dropId==="dropPrev") queuePreviewRender("upload");
     }
   });
 }
-function updatePreview(file, imgEl, nameEl){
+function updatePreviewThumb(file, imgEl, nameEl){
   nameEl.textContent = "✅ " + file.name;
   nameEl.style.display = "block";
   const r = new FileReader();
@@ -741,7 +1002,7 @@ function updatePreview(file, imgEl, nameEl){
 }
 
 /* =========================================================
-   AI load (lazy)
+   AI load
 ========================================================= */
 function setAIUI(state, text){
   const dot = document.getElementById("dotAI");
@@ -763,7 +1024,6 @@ async function ensureAIModelsLoaded(){
     setAIUI("ready", "AI 준비완료");
     return true;
   }catch(e){
-    console.warn(e);
     setAIUI("failed", "AI 실패(우회) · 수동/대체로 진행");
     return false;
   }finally{
@@ -787,7 +1047,6 @@ async function ensureCocoLoadedIfNeeded(){
     setAIUI("ready", "AI 준비완료 + COCO-SSD");
     return true;
   }catch(e){
-    console.warn("COCO-SSD 로딩 실패:", e);
     setAIUI("failed", "COCO-SSD 실패(우회) · 기본 AI로 진행");
     return false;
   }finally{
@@ -816,7 +1075,7 @@ function refreshReady(){
 }
 
 /* =========================================================
-   Image decode + resize
+   Image decode + draw
 ========================================================= */
 async function fileToHTMLImage(file){
   return await new Promise((resolve, reject)=>{
@@ -846,7 +1105,7 @@ function applyOrientationTransform(ctx, orientation, w, h){
     case 8: ctx.translate(0, h); ctx.rotate(-0.5*Math.PI); break;
   }
 }
-function drawScaledToCanvas(bitmapOrImg, maxDim, orientation=1){
+function drawScaledToCanvas(canvas, bitmapOrImg, maxDim, orientation=1){
   const ow = bitmapOrImg.width;
   const oh = bitmapOrImg.height;
   if(orientation === 5 || orientation === 7) orientation = 1;
@@ -859,7 +1118,6 @@ function drawScaledToCanvas(bitmapOrImg, maxDim, orientation=1){
   const tw = Math.max(1, Math.round(rw * scale));
   const th = Math.max(1, Math.round(rh * scale));
 
-  const canvas = document.getElementById("canvas");
   const ctx = canvas.getContext("2d", {willReadFrequently:true});
   canvas.width = tw; canvas.height = th;
 
@@ -876,27 +1134,15 @@ function drawScaledToCanvas(bitmapOrImg, maxDim, orientation=1){
   ctx.restore();
   ctx.restore();
 
-  return {canvas, ctx, tw, th};
+  return {w:tw, h:th};
 }
-function canvasToImageData(){
-  const canvas = document.getElementById("canvas");
+function getImageDataFromCanvas(canvas){
   const ctx = canvas.getContext("2d", {willReadFrequently:true});
   return ctx.getImageData(0,0,canvas.width, canvas.height);
 }
-function drawBitmapToFixedSize(bitmapOrImg, w, h){
-  const canvas = document.getElementById("canvas");
-  const ctx = canvas.getContext("2d", {willReadFrequently:true});
-  canvas.width = w; canvas.height = h;
-  ctx.setTransform(1,0,0,1,0,0);
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-  ctx.clearRect(0,0,w,h);
-  ctx.drawImage(bitmapOrImg, 0, 0, w, h);
-  return ctx.getImageData(0,0,w,h);
-}
 
 /* =========================================================
-   ✅ PSE HSL Guard
+   PSE HSL Guard + Point clamp
 ========================================================= */
 function pseConeMaxS01(l01){
   const t = Math.abs(2*l01 - 1);
@@ -920,9 +1166,13 @@ function pseGuardAxisAdjust(axis, avgL01){
 
   return {...axis, canonS: clamp(s,-30,30), canonL: clamp(l,-30,30)};
 }
+function pseClampPointS01(s01, l01){
+  const maxS = pseConeMaxS01(l01);
+  return clamp(s01, 0, maxS);
+}
 
 /* =========================================================
-   Overlay helpers
+   Curve helper
 ========================================================= */
 function curve5ToLUT(curve5){
   const xs = [0,64,128,192,255];
@@ -940,118 +1190,406 @@ function curve5ToLUT(curve5){
   for(let i=1;i<256;i++){ if(lut[i] < lut[i-1]) lut[i] = lut[i-1]; }
   return lut;
 }
-function isPortraitLike(baseStr){
-  const s = (baseStr || "").toLowerCase();
-  return s.includes("portrait") || s.includes("인물");
-}
-function applyHighlightKnee(lut, kneeStart, kneeStrength){
-  if(kneeStrength <= 0) return lut;
-  const out = new Uint8Array(256);
-  for(let i=0;i<256;i++){
-    let v = lut[i];
-    if(i >= kneeStart){
-      const t = (i - kneeStart) / (255 - kneeStart + 1e-6);
-      const compress = 1.0 - kneeStrength * (0.35 + 0.65*t);
-      v = Math.round(kneeStart + (v - kneeStart) * compress);
-    }
-    out[i] = clamp(v, 0, 255);
-    if(i>0 && out[i] < out[i-1]) out[i] = out[i-1];
-  }
-  return out;
-}
-function realaSkinAxisStrength(strength01, skinRatio){
-  const s = clamp(skinRatio || 0, 0, 0.35) / 0.35;
-  const factor = clamp(0.55 - 0.33*s, 0.22, 0.55);
-  return strength01 * factor;
-}
-function normalizeAnalysis(result){
-  const safe = (v, d)=> (v===undefined || v===null) ? d : v;
-  return {
-    contrast: clamp(parseInt(safe(result.contrast,0),10)||0, -4, 4),
-    sat:      clamp(parseInt(safe(result.sat,0),10)||0, -4, 4),
-    tone:     clamp(parseInt(safe(result.tone,0),10)||0, -4, 4),
-    toneLUT:  safe(result.toneLUT, new Uint8Array(256).map((_,i)=>i)),
-    axes:     Array.isArray(result.axes) ? result.axes : [],
-    lift:     safe(result.lift, {isLifted:false, strength:0, liftPx:0}),
-    base:     safe(result.base, "표준 (Standard)"),
-    baseReason: safe(result.baseReason, "-"),
-    warnings: Array.isArray(result.warnings) ? result.warnings : [],
-    wb:       safe(result.wb, {ok:false, kelvin:0, abLabel:"0", gmLabel:"0", reliability:0.2, note:"-"}),
-    skin:     safe(result.skin, {ratio:0, highlightRisk:0, sampled:0, source:"none"}),
-    exposure: safe(result.exposure, {shadowRatio:0, highlightRatio:0, midRatio:0, note:"-"}),
-    regions:  safe(result.regions, {sky:0, foliage:0, skin:0, valid:0}),
-    specificPoints: Array.isArray(result.specificPoints) ? result.specificPoints : [],
-    spDebug:  safe(result.spDebug, {enabled:false, minCount:0, stepPx:0, candidates:0, picked:0, fallbackPicked:0, note:"-"}),
-    aiTypeDetected: safe(result.aiTypeDetected, "fallback"),
-    aiNote:   safe(result.aiNote, "-"),
-    cocoTop:  safe(result.cocoTop, null),
-    sceneHint: safe(result.sceneHint, {kind:"unknown", note:"-"}),
-    baseHint: safe(result.baseHint, safe(result.base,"표준 (Standard)"))
-  };
-}
-function applyFujiOverlay(analysisIn, presetKey, strength01){
-  const analysis = normalizeAnalysis(analysisIn);
-  if(!presetKey || presetKey === "off" || !FUJI_PRESETS[presetKey] || strength01 <= 0){
-    analysis.baseHint = analysis.base;
-    return analysis;
+
+/* =========================================================
+   PREVIEW: preset-only recipe
+   - ClassicNegative는 previewFx 포함
+========================================================= */
+function buildPresetOnlyRecipe(presetKey, presetStrength01){
+  const idLUT = new Uint8Array(256).map((_,i)=>i);
+  if(!presetKey || presetKey==="off" || !FUJI_PRESETS[presetKey] || presetStrength01<=0){
+    return {
+      name: "Identity",
+      contrast: 0, sat: 0, tone: 0,
+      toneLUT: idLUT,
+      axes: ["R","Y","G","C","B","M"].map(k=>({axis:k,canonH:0,canonS:0,canonL:0,avgL01:0.5})),
+      specificPoints: [],
+      meta: "Preset OFF"
+    };
   }
 
   const p = FUJI_PRESETS[presetKey];
-  const portraitLike = (analysis.aiTypeDetected === "portrait") || isPortraitLike(analysis.base);
-  const skinRatio = analysis.skin?.ratio || 0;
-  const hlRisk = analysis.skin?.highlightRisk || analysis.exposure?.highlightRatio || 0;
-
-  const outContrast = clamp(Math.round(lerp(analysis.contrast, p.contrast, strength01)), -4, 4);
-  const outSat      = clamp(Math.round(lerp(analysis.sat,      p.sat,      strength01)), -4, 4);
-  const outTone     = clamp(Math.round(lerp(analysis.tone,     p.tone,     strength01)), -4, 4);
-
   const pLUT = curve5ToLUT(p.curve5);
-  let outLUT = new Uint8Array(256);
+  const outLUT = new Uint8Array(256);
   for(let i=0;i<256;i++){
-    outLUT[i] = clamp(Math.round(lerp(analysis.toneLUT[i], pLUT[i], strength01)), 0, 255);
+    outLUT[i] = clamp(Math.round(lerp(idLUT[i], pLUT[i], presetStrength01)), 0, 255);
   }
   for(let i=1;i<256;i++){ if(outLUT[i] < outLUT[i-1]) outLUT[i] = outLUT[i-1]; }
 
-  if(p.skinProtect){
-    const baseKneeStart = portraitLike ? 195 : 205;
-    const kneeStart = clamp(Math.round(baseKneeStart - 12 * clamp(hlRisk,0,1)), 182, 210);
-
-    let kneeStrength = strength01 * (portraitLike ? 0.55 : 0.42);
-    kneeStrength *= (1.0 + 0.65*clamp(skinRatio/0.20, 0, 1));
-    kneeStrength *= (1.0 + 0.55*clamp(hlRisk, 0, 1));
-    kneeStrength = clamp(kneeStrength, 0, 0.42);
-
-    outLUT = applyHighlightKnee(outLUT, kneeStart, kneeStrength);
-  }
-
-  const outAxes = analysis.axes.map(ax=>{
-    const key = ax.axis;
-    const pa = p.axes?.[key];
-    if(!pa) return {...ax};
-
-    let axisStrength = strength01;
-    if(presetKey === "reala_ace" && (key === "R" || key === "Y")){
-      axisStrength = realaSkinAxisStrength(axisStrength, skinRatio);
-    }
-    if(p.skinProtect && portraitLike && (key === "R" || key === "Y")){
-      axisStrength = Math.min(axisStrength, strength01 * 0.45);
-    }
-
-    const targetH = clamp(Math.round(lerp(ax.canonH, pa.H, axisStrength)), -30, 30);
-    const safeH = (p.skinProtect && (key==="R"||key==="Y") && (portraitLike || skinRatio > 0.03))
-      ? clamp(targetH, -10, +10)
-      : targetH;
-
-    return {
-      ...ax,
-      canonH: safeH,
-      canonS: clamp(Math.round(lerp(ax.canonS, pa.S, axisStrength)), -30, 30),
-      canonL: clamp(Math.round(lerp(ax.canonL, pa.L, axisStrength)), -30, 30),
+  const axes = ["R","Y","G","C","B","M"].map(k=>{
+    const a = p.axes[k];
+    const base = {axis:k,
+      canonH: clamp(Math.round(a.H * presetStrength01), -30, 30),
+      canonS: clamp(Math.round(a.S * presetStrength01), -30, 30),
+      canonL: clamp(Math.round(a.L * presetStrength01), -30, 30),
+      avgL01: 0.5
     };
+    return pseGuardAxisAdjust(base, 0.5);
   });
 
-  analysis.baseHint = `${analysis.base} + ${p.name}${p.skinProtect ? " SkinSafe" : ""} ${Math.round(strength01*100)}%`;
-  return {...analysis, contrast: outContrast, sat: outSat, tone: outTone, toneLUT: outLUT, axes: outAxes};
+  const fx = p.previewFx ? {
+    rgbMatrix: p.previewFx.rgbMatrix,
+    satMul: lerp(1.0, p.previewFx.satMul, presetStrength01),   // strength로 blend
+    hslRegions: p.previewFx.hslRegions
+  } : null;
+
+  return {
+    name: p.name,
+    contrast: clamp(Math.round(p.contrast * presetStrength01), -4, 4),
+    sat:      clamp(Math.round(p.sat * presetStrength01), -4, 4),
+    tone:     clamp(Math.round(p.tone * presetStrength01), -4, 4),
+    toneLUT: outLUT,
+    axes,
+    specificPoints: [],
+    previewFx: fx,
+    meta: `PresetOnly ${p.name}${fx ? " + MatrixFX" : ""} ${Math.round(presetStrength01*100)}%`
+  };
+}
+
+/* =========================================================
+   PREVIEW: apply recipe to ImageData
+   - 순서:
+     1) LUT
+     2) (optional) RGB matrix cross-talk (sRGB space float)
+     3) HSL -> (optional) satMul + region ΔH/ΔS/ΔL
+     4) recipe contrast/sat/tone + axes + points
+========================================================= */
+function rgbToHsl(r,g,b){
+  r/=255; g/=255; b/=255;
+  const max=Math.max(r,g,b), min=Math.min(r,g,b);
+  let h=0,s=0;
+  const l=(max+min)/2;
+  if(max!==min){
+    const d=max-min;
+    s = l>0.5 ? d/(2-max-min) : d/(max+min);
+    switch(max){
+      case r: h=(g-b)/d + (g<b?6:0); break;
+      case g: h=(b-r)/d + 2; break;
+      case b: h=(r-g)/d + 4; break;
+    }
+    h/=6;
+  }
+  return [h*360, s, l];
+}
+function hue2rgb(p, q, t){
+  if(t<0) t+=1;
+  if(t>1) t-=1;
+  if(t<1/6) return p + (q-p)*6*t;
+  if(t<1/2) return q;
+  if(t<2/3) return p + (q-p)*(2/3 - t)*6;
+  return p;
+}
+function hslToRgb(hDeg, s, l){
+  let r,g,b;
+  const h = ((hDeg%360)+360)%360 / 360;
+  if(s===0){
+    r=g=b=l;
+  }else{
+    const q = l < 0.5 ? l*(1+s) : l + s - l*s;
+    const p = 2*l - q;
+    r = hue2rgb(p,q,h + 1/3);
+    g = hue2rgb(p,q,h);
+    b = hue2rgb(p,q,h - 1/3);
+  }
+  return [Math.round(clamp(r,0,1)*255), Math.round(clamp(g,0,1)*255), Math.round(clamp(b,0,1)*255)];
+}
+function circularHueDiffDeg(a,b){
+  let d=(a-b)%360;
+  if(d>180) d-=360;
+  if(d<=-180) d+=360;
+  return d;
+}
+function axisFromHue(h){
+  if(h>=340 || h<20) return "R";
+  if(h>=20 && h<80) return "Y";
+  if(h>=80 && h<150) return "G";
+  if(h>=150 && h<210) return "C";
+  if(h>=210 && h<280) return "B";
+  return "M";
+}
+function buildAxisMap(axes){
+  const m = {};
+  (axes||[]).forEach(a=> m[a.axis] = a);
+  return m;
+}
+function applyRgbMatrixSRGB(r,g,b, m3){
+  // inputs: 0..255 -> float 0..1, operate in sRGB float as python snippet
+  const rf = r/255, gf = g/255, bf = b/255;
+  const r2 = rf*m3[0][0] + gf*m3[0][1] + bf*m3[0][2];
+  const g2 = rf*m3[1][0] + gf*m3[1][1] + bf*m3[1][2];
+  const b2 = rf*m3[2][0] + gf*m3[2][1] + bf*m3[2][2];
+  return [
+    Math.round(clamp(r2,0,1)*255),
+    Math.round(clamp(g2,0,1)*255),
+    Math.round(clamp(b2,0,1)*255),
+  ];
+}
+function applyHslRegionDeltas(hDeg, s, l, regions, strength01){
+  if(!regions || !regions.length || strength01<=0) return [hDeg,s,l];
+
+  // soft weighting around ranges: 10deg feather
+  const FEATHER = 10;
+  let outH = hDeg, outS = s, outL = l;
+
+  for(const rg of regions){
+    const inRange = (rg.h0 <= rg.h1)
+      ? (hDeg >= rg.h0 && hDeg <= rg.h1)
+      : (hDeg >= rg.h0 || hDeg <= rg.h1);
+
+    // distance to range (0 inside, >0 outside)
+    let dist = 0;
+    if(inRange){
+      dist = 0;
+    }else{
+      // compute min circular distance to the nearest boundary
+      const d0 = Math.abs(circularHueDiffDeg(hDeg, rg.h0));
+      const d1 = Math.abs(circularHueDiffDeg(hDeg, rg.h1));
+      dist = Math.min(d0, d1);
+    }
+
+    const w = clamp(1 - (dist/FEATHER), 0, 1) * strength01;
+    if(w <= 0) continue;
+
+    outH = outH + rg.dH * w;
+    // ΔS, ΔL are ratio changes
+    outS = clamp(outS * (1 + rg.dS * w), 0, 1);
+    outL = clamp(outL * (1 + rg.dL * w), 0, 1);
+  }
+  return [outH,outS,outL];
+}
+
+function applyRecipeToImageData(srcImageData, recipe, strength01, enablePoints){
+  const w = srcImageData.width, h = srcImageData.height;
+  const src = srcImageData.data;
+  const out = new ImageData(w,h);
+  const dst = out.data;
+
+  const lut = recipe.toneLUT || new Uint8Array(256).map((_,i)=>i);
+
+  // recipe sliders/axes (PSE-like)
+  const cFactor = 1 + (recipe.contrast||0) * 0.12 * strength01;
+  const sFactor = 1 + (recipe.sat||0) * 0.18 * strength01;
+  const toneDeg = (recipe.tone||0) * 2.0 * strength01;
+  const axisMap = buildAxisMap(recipe.axes || []);
+
+  const points = enablePoints ? (recipe.specificPoints || []).slice(0, 12) : [];
+  const hasPoints = points.length>0;
+
+  // preview fx (ClassicNeg matrix/hsl)
+  const fx = recipe.previewFx || null;
+  const fxMatrix = fx?.rgbMatrix || null;
+  const fxSatMul = (typeof fx?.satMul === "number") ? fx.satMul : 1.0;
+  const fxRegions = fx?.hslRegions || null;
+
+  for(let i=0;i<src.length;i+=4){
+    let r = src[i], g = src[i+1], b = src[i+2], a = src[i+3];
+
+    // 1) tone curve LUT
+    r = lut[r]; g = lut[g]; b = lut[b];
+
+    // 2) RGB matrix cross-talk (preview only)
+    if(fxMatrix){
+      const rgb2 = applyRgbMatrixSRGB(r,g,b, fxMatrix);
+      r = rgb2[0]; g = rgb2[1]; b = rgb2[2];
+    }
+
+    // 3) HSL stage (region deltas + satMul)
+    let [hDeg, s, l] = rgbToHsl(r,g,b);
+    // global sat mul (HSV S*0.85를 HSL S에 근사 적용)
+    s = clamp(s * fxSatMul, 0, 1);
+    // region deltas
+    [hDeg, s, l] = applyHslRegionDeltas(hDeg, s, l, fxRegions, strength01);
+
+    // 4) PSE-like base/axes/points
+    l = clamp(0.5 + (l - 0.5)*cFactor, 0, 1);
+    s = clamp(s * sFactor, 0, 1);
+    hDeg = (hDeg + toneDeg);
+
+    const axK = axisFromHue(hDeg);
+    const ax = axisMap[axK];
+    if(ax){
+      hDeg += ax.canonH * strength01;
+      s = clamp(s * (1 + (ax.canonS/55) * strength01), 0, 1);
+      l = clamp(l + (ax.canonL/220) * strength01, 0, 1);
+    }
+
+    if(hasPoints){
+      for(let p=0;p<points.length;p++){
+        const pt = points[p];
+        const dh = Math.abs(circularHueDiffDeg(hDeg, pt.inH));
+        if(dh > 18) continue;
+        const ds = Math.abs(s - pt.inS);
+        const dl = Math.abs(l - pt.inL);
+        if(ds > 0.35 || dl > 0.35) continue;
+
+        const wh = 1 - (dh/18);
+        const ws = 1 - (ds/0.35);
+        const wl = 1 - (dl/0.35);
+        const wgt = clamp(wh*ws*wl, 0, 1) * 0.35 * strength01;
+
+        hDeg = hDeg + circularHueDiffDeg(pt.outH, hDeg) * wgt;
+        s = lerp(s, pt.outS, wgt);
+        l = lerp(l, pt.outL, wgt);
+      }
+    }
+
+    const rgb = hslToRgb(hDeg, s, l);
+    dst[i]   = rgb[0];
+    dst[i+1] = rgb[1];
+    dst[i+2] = rgb[2];
+    dst[i+3] = a;
+  }
+  return out;
+}
+
+/* =========================================================
+   PREVIEW: split draw (cached)
+========================================================= */
+function drawSplitFromCache(){
+  if(!previewCache) return;
+  const canvas = document.getElementById("previewCanvas");
+  const ctx = canvas.getContext("2d", {willReadFrequently:true});
+
+  const beforeImg = previewCache.before;
+  const afterImg  = previewCache.after;
+  const w = beforeImg.width, h = beforeImg.height;
+  canvas.width = w; canvas.height = h;
+
+  ctx.putImageData(afterImg, 0, 0);
+
+  const tmpCanvas = document.createElement("canvas");
+  tmpCanvas.width = w; tmpCanvas.height = h;
+  tmpCanvas.getContext("2d").putImageData(beforeImg, 0, 0);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, Math.round(w * split01), h);
+  ctx.clip();
+  ctx.drawImage(tmpCanvas, 0, 0);
+  ctx.restore();
+
+  const x = Math.round(w*split01)+0.5;
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.88)";
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
+
+  ctx.fillStyle = "rgba(255,255,255,0.88)";
+  ctx.beginPath();
+  ctx.arc(x, Math.min(22, h*0.12), 7, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+
+  updatePreviewLabels();
+}
+
+/* =========================================================
+   PREVIEW: render task
+========================================================= */
+let previewRenderToken = 0;
+function queuePreviewRender(reason){
+  if(!prevFileState) return;
+  const token = ++previewRenderToken;
+  setTimeout(()=>{ if(token===previewRenderToken) renderPreview(reason); }, 80);
+}
+async function renderPreview(reason){
+  if(!prevFileState) return;
+  if(previewBusy) return;
+  previewBusy = true;
+
+  try{
+    const mode = document.getElementById("previewMode").value;
+    const pd = parseInt(document.getElementById("previewDim").value, 10);
+    const st01 = parseInt(document.getElementById("previewStrength").value,10)/100;
+
+    const useRecipe = (mode === "recipe");
+    if(useRecipe && !lastRecipe){
+      setPvMeta("레시피 없음(먼저 분석하세요)");
+      previewCache = null;
+      return;
+    }
+
+    const ori = await getExifOrientation(prevFileState);
+    const bm = await decodeToImageBitmap(prevFileState);
+
+    const canvas = document.createElement("canvas");
+    drawScaledToCanvas(canvas, bm, pd, ori);
+    const before = getImageDataFromCanvas(canvas);
+
+    let recipe;
+    let meta;
+    if(useRecipe){
+      recipe = lastRecipe;
+      meta = `Recipe · ${lastRecipe.baseHint || "Last"} · strength ${Math.round(st01*100)}%`;
+    }else{
+      const presetKey = document.getElementById("fujiPreset").value;
+      const pStrength = parseInt(document.getElementById("presetStrength").value, 10)/100;
+      recipe = buildPresetOnlyRecipe(presetKey, pStrength);
+      meta = `${recipe.meta} · preview ${Math.round(st01*100)}%`;
+    }
+
+    const enablePoints = useRecipe;
+    const after = applyRecipeToImageData(before, recipe, st01, enablePoints);
+
+    previewCache = {before, after, w: before.width, h: before.height, metaText: meta};
+    setPvMeta(`${meta} · ${before.width}x${before.height}`);
+
+    drawSplitFromCache();
+  }catch(e){
+    console.error(e);
+    setPvMeta("미리보기 오류: 이미지/브라우저 제한 확인");
+  }finally{
+    previewBusy = false;
+  }
+}
+
+/* =========================================================
+   PREVIEW: drag interaction
+========================================================= */
+function setSplitFromClientX(clientX){
+  const canvas = document.getElementById("previewCanvas");
+  const rect = canvas.getBoundingClientRect();
+  const x = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+  split01 = x;
+  drawSplitFromCache();
+}
+function bindPreviewDrag(){
+  const canvas = document.getElementById("previewCanvas");
+  let dragging = false;
+
+  const onDown = (e)=>{
+    if(!previewCache) return;
+    dragging = true;
+    if(e.pointerId !== undefined && canvas.setPointerCapture){
+      try{ canvas.setPointerCapture(e.pointerId); }catch(_){}
+    }
+    setSplitFromClientX(e.clientX);
+  };
+  const onMove = (e)=>{
+    if(!dragging) return;
+    setSplitFromClientX(e.clientX);
+  };
+  const onUp = ()=>{ dragging = false; };
+
+  canvas.addEventListener("pointerdown", onDown);
+  canvas.addEventListener("pointermove", onMove);
+  canvas.addEventListener("pointerup", onUp);
+  canvas.addEventListener("pointercancel", onUp);
+  canvas.addEventListener("pointerleave", onUp);
+}
+
+/* =========================================================
+   PREVIEW: save PNG
+========================================================= */
+function savePreviewPNG(){
+  const canvas = document.getElementById("previewCanvas");
+  if(!prevFileState || !canvas.width || !canvas.height) return;
+  const a = document.createElement("a");
+  const ts = new Date();
+  const name = `preview_v11.4_${ts.getFullYear()}${String(ts.getMonth()+1).padStart(2,"0")}${String(ts.getDate()).padStart(2,"0")}_${String(ts.getHours()).padStart(2,"0")}${String(ts.getMinutes()).padStart(2,"0")}.png`;
+  a.download = name;
+  a.href = canvas.toDataURL("image/png");
+  a.click();
 }
 
 /* =========================================================
@@ -1307,7 +1845,6 @@ function initWorker(){
 
       let valid=0;
       let sumS=0, sumTone=0, toneN=0;
-
       const step = 4 * Math.max(1, stridePx|0);
 
       for(let i=0;i<rgba.length;i+=step){
@@ -1359,11 +1896,10 @@ function initWorker(){
 
       const avgS = toneN>0 ? (sumS/toneN) : 0;
       const avgTone = toneN>0 ? (sumTone/toneN) : 0;
-
       return {axes: out, validColored: valid, avgS, avgTone};
     }
 
-    // ========= Specific Points v11.1.1 =========
+    // Specific Points (2-shot only)
     function regionMaskType(r,g,b){
       const y = 0.299*r + 0.587*g + 0.114*b;
       const hsv = rgbToHsv01(r,g,b);
@@ -1384,7 +1920,6 @@ function initWorker(){
       if(y > 200) return 4;
       return 5;
     }
-
     function initBins(regionCount, hueBins){
       const bins = [];
       for(let r=0;r<regionCount;r++){
@@ -1411,16 +1946,11 @@ function initWorker(){
       if(hDeg < 0) hDeg += 360;
       return {hDeg, s01: b.sumS/b.count, l01: b.sumL/b.count, count: b.count};
     }
-
     function computeMinCount(stridePx, pixelCount){
-      // v11.1의 220은 모바일/stride에서 너무 빡셈 → 자동 완화
-      // - stride 10(1024 권장): 70~110
-      // - stride 8(1280 정밀): 90~140
       const base = (stridePx <= 8) ? 110 : 85;
       const scale = clamp(Math.sqrt(pixelCount / 700000), 0.75, 1.25);
       return Math.round(base * scale);
     }
-
     function buildSpecificPoints(origRGBA, refRGBA, stridePx){
       const regionCount = 6;
       const hueBins = 24;
@@ -1464,7 +1994,6 @@ function initWorker(){
           if(!mo || !mr) continue;
           candidates++;
           if(mo.count < minCount || mr.count < minCount) continue;
-
           points.push({
             region: regionNames[reg],
             inH: mo.hDeg, inS: mo.s01, inL: mo.l01,
@@ -1483,10 +2012,8 @@ function initWorker(){
 
       const picked = points.slice(0, 36);
 
-      // ✅ 백업: 지역 매칭이 너무 안 되면 "글로벌(HUE-bin)" 포인트를 생성
       let fallbackPicked = [];
       if(picked.length < 6){
-        // 글로벌은 regionCount=1처럼 MID로 합쳐서 처리
         const gO = new Array(hueBins).fill(0).map(()=>({sumCos:0,sumSin:0,sumS:0,sumL:0,count:0}));
         const gR = new Array(hueBins).fill(0).map(()=>({sumCos:0,sumSin:0,sumS:0,sumL:0,count:0}));
 
@@ -1507,9 +2034,7 @@ function initWorker(){
           pushBin([gR], 0, hi, hDeg, s, l);
         }
 
-        // fallback는 더 완화된 threshold
         const minCount2 = Math.max(35, Math.round(minCount * 0.55));
-
         const tmp = [];
         for(let hi=0; hi<hueBins; hi++){
           const mo = binToMean(gO[hi]);
@@ -1529,18 +2054,14 @@ function initWorker(){
       }
 
       const final = (picked.length >= 6) ? picked : (picked.concat(fallbackPicked)).slice(0, 24);
-
       const note =
         (picked.length>=6) ? "region OK"
         : (fallbackPicked.length>0 ? "fallback GLOBAL used" : "no valid bins");
 
-      return {
-        points: final,
-        debug: { enabled:true, minCount, stepPx, candidates, picked: picked.length, fallbackPicked: fallbackPicked.length, note }
-      };
+      return { points: final, debug: {minCount, stepPx, candidates, picked: picked.length, fallbackPicked: fallbackPicked.length, note} };
     }
 
-    function baseRecommend(mode, aiType, axesR, totalColored, contrast, sceneHint){
+    function baseRecommend(mode, aiType, axesR, totalColored, contrast){
       if(mode !== "auto"){
         if(mode==="portrait") return {base:"인물사진 (Portrait)", reason:"수동"};
         if(mode==="landscape") return {base:"풍경사진 (Landscape)", reason:"수동"};
@@ -1558,7 +2079,7 @@ function initWorker(){
     }
 
     self.onmessage = (e)=>{
-      const {origBuf, refBuf, hasOrig, aiType, mode, stridePx, sceneHint, enableSpecPoints} = e.data;
+      const {origBuf, refBuf, hasOrig, aiType, mode, stridePx, enableSpecPoints} = e.data;
       const stride = Math.max(1, stridePx|0);
 
       const refRGBA = new Uint8ClampedArray(refBuf);
@@ -1590,7 +2111,6 @@ function initWorker(){
       };
 
       const keys = ['R','Y','G','C','B','M'];
-      const names = ["Red","Yellow","Green","Cyan","Blue","Magenta"];
       const axesOut = [];
       for(let i=0;i<6;i++){
         const k = keys[i];
@@ -1606,7 +2126,6 @@ function initWorker(){
 
         axesOut.push({
           axis: k,
-          label: names[i],
           canonH: clamp(Math.round((diffH/6.0) * reliability), -30, 30),
           canonS: clamp(Math.round((diffS/10.0) * reliability), -30, 30),
           canonL: clamp(Math.round((diffL/10.0) * reliability), -30, 30),
@@ -1615,13 +2134,10 @@ function initWorker(){
         });
       }
 
-      const baseRec = baseRecommend(mode, aiType, axesR, cR.validColored, contrast, sceneHint);
-
+      const baseRec = baseRecommend(mode, aiType, axesR, cR.validColored, contrast);
       const warnings = [];
-      const darkRatio = r.tooDark / r.total;
-      const brightRatio = r.tooBright / r.total;
-      if(darkRatio > 0.35) warnings.push("타겟이 매우 어둡습니다(암부 비중↑). 결과 신뢰도가 낮아질 수 있습니다.");
-      if(brightRatio > 0.35) warnings.push("타겟이 매우 밝습니다(명부 비중↑). 톤커브가 단순화될 수 있습니다.");
+      if((r.tooDark / r.total) > 0.35) warnings.push("타겟이 매우 어둡습니다(암부 비중↑).");
+      if((r.tooBright / r.total) > 0.35) warnings.push("타겟이 매우 밝습니다(명부 비중↑).");
       if(cR.validColored < 1500) warnings.push("유효 색상 데이터가 부족합니다(저채도/무채색). 6색축은 참고용입니다.");
 
       const wb = estimateWB(refRGBA, stride);
@@ -1629,20 +2145,14 @@ function initWorker(){
       const regions = estimateRegions(refRGBA, stride);
 
       let specificPoints = [];
-      let spDebug = {enabled:false, minCount:0, stepPx:stride, candidates:0, picked:0, fallbackPicked:0, note:"-"};
-
-      if(enableSpecPoints){
-        if(hasOrig){
-          const res = buildSpecificPoints(origRGBA, refRGBA, stride);
-          specificPoints = res.points || [];
-          spDebug = res.debug || spDebug;
-          if(specificPoints.length === 0){
-            warnings.push("Specific Points: 포인트 0개. (v11.1.1은 백업까지 시도했지만 샘플이 너무 부족한 케이스)");
-          }
-        }else{
-          warnings.push("Specific Points: 2장 모드에서만 생성됩니다. (원본+타겟 필요)");
-          spDebug = {enabled:true, minCount:0, stepPx:stride, candidates:0, picked:0, fallbackPicked:0, note:"need 2-shot"};
-        }
+      let spDebug = null;
+      if(enableSpecPoints && hasOrig){
+        const res = buildSpecificPoints(origRGBA, refRGBA, stride);
+        specificPoints = res.points || [];
+        spDebug = res.debug || null;
+        if(specificPoints.length === 0) warnings.push("Specific Points: 포인트 0개(샘플 부족).");
+      }else if(enableSpecPoints && !hasOrig){
+        warnings.push("Specific Points: 2장 모드에서만 생성됩니다.");
       }
 
       self.postMessage({
@@ -1673,7 +2183,7 @@ function initWorker(){
 }
 
 /* =========================================================
-   AI detection (간단)
+   AI detection
 ========================================================= */
 async function detectAiType(canvas){
   if(userMode !== "auto") return {type:"manual", note:"수동"};
@@ -1708,24 +2218,12 @@ async function cocoDetectTopIfEnabled(canvas){
     return null;
   }
 }
-function buildSceneHint(cocoTop){
-  if(!cocoTop) return {kind:"unknown", note:"-"};
-  const c = (cocoTop.class || "").toLowerCase();
-  const s = cocoTop.score || 0;
-  const ar = cocoTop.areaRatio || 0;
-  return {kind:"object", note:`COCO:${c} (${Math.round(s*100)}%, area ${Math.round(ar*100)}%)`};
-}
 
 /* =========================================================
-   Specific points formatting (PSE cone clamp)
+   Specific points format
 ========================================================= */
-function pseClampPointS01(s01, l01){
-  const maxS = pseConeMaxS01(l01);
-  return clamp(s01, 0, maxS);
-}
 function fmtPct01(x){ return `${Math.round(clamp(x,0,1)*100)}%`; }
 function fmtDeg(x){ return `${Math.round(((x%360)+360)%360)}°`; }
-
 function formatSpecificPoints(points){
   if(!points || !points.length) return {summary:"", full:""};
   const lines = points.slice(0, 10).map((p, idx)=>{
@@ -1736,7 +2234,7 @@ function formatSpecificPoints(points){
   const full = points.map((p, idx)=>{
     const inS = pseClampPointS01(p.inS, p.inL);
     const outS = pseClampPointS01(p.outS, p.outL);
-    return `${idx+1}) [${p.region}] IN(H ${fmtDeg(p.inH)} / S ${fmtPct01(inS)} / L ${fmtPct01(p.inL)})  →  OUT(H ${fmtDeg(p.outH)} / S ${fmtPct01(outS)} / L ${fmtPct01(p.outL)})  (nO ${p.countO}, nR ${p.countR})`;
+    return `${idx+1}) [${p.region}] IN(H ${fmtDeg(p.inH)} / S ${fmtPct01(inS)} / L ${fmtPct01(p.inL)})  →  OUT(H ${fmtDeg(p.outH)} / S ${fmtPct01(outS)} / L ${fmtPct01(p.outL)})`;
   }).join("\n");
   return {summary: lines.join("\n"), full};
 }
@@ -1758,34 +2256,31 @@ async function analyzeAll(){
   document.getElementById("resultCard").classList.add("hide");
 
   try{
+    initWorker();
+
     const maxDim = parseInt(document.getElementById("maxDim").value, 10);
     const stridePx = (maxDim >= 1280) ? 8 : 10;
     const enableSpecPoints = (document.getElementById("specPoints").value === "on");
 
-    initWorker();
+    const wc = document.getElementById("workCanvas");
 
     // ref
     const refOri = await getExifOrientation(refFileState);
     const bmR = await decodeToImageBitmap(refFileState);
-    const refCanvasInfo = drawScaledToCanvas(bmR, maxDim, refOri);
-    const refId = canvasToImageData();
+    const refSize = drawScaledToCanvas(wc, bmR, maxDim, refOri);
+    const refId = getImageDataFromCanvas(wc);
 
-    // AI
     let ai = {type:"fallback", note:"-"};
     let cocoTop = null;
-    let sceneHint = {kind:"unknown", note:"-"};
 
     if(userMode === "auto"){
       await ensureAIModelsLoaded();
       await ensureCocoLoadedIfNeeded();
 
-      ai = await detectAiType(refCanvasInfo.canvas);
+      ai = await detectAiType(wc);
 
       if(cocoModel){
-        cocoTop = await cocoDetectTopIfEnabled(refCanvasInfo.canvas);
-        sceneHint = buildSceneHint(cocoTop);
-
-        // person 승격 안정화(기본)
+        cocoTop = await cocoDetectTopIfEnabled(wc);
         if(cocoTop && cocoTop.class === "person"){
           const scoreOK = (cocoTop.score || 0) >= 0.65;
           const areaOK  = (cocoTop.areaRatio || 0) >= 0.08;
@@ -1796,18 +2291,28 @@ async function analyzeAll(){
       }
     }
 
-    // orig (ref size 강제)
+    // orig (2-shot)
     let origId = null;
     if(shotMode === "two"){
       const origOri = await getExifOrientation(origFileState);
       const bmO = await decodeToImageBitmap(origFileState);
-      const w = refCanvasInfo.tw, h = refCanvasInfo.th;
-      const tmp = drawScaledToCanvas(bmO, maxDim, origOri);
-      origId = drawBitmapToFixedSize(tmp.canvas, w, h);
-      drawBitmapToFixedSize(bmR, w, h);
+
+      const ctx = wc.getContext("2d", {willReadFrequently:true});
+      wc.width = refSize.w; wc.height = refSize.h;
+      ctx.setTransform(1,0,0,1,0,0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.clearRect(0,0,refSize.w, refSize.h);
+
+      const tmp = document.createElement("canvas");
+      drawScaledToCanvas(tmp, bmO, Math.max(refSize.w, refSize.h), origOri);
+      ctx.drawImage(tmp, 0, 0, refSize.w, refSize.h);
+      origId = ctx.getImageData(0,0,refSize.w, refSize.h);
+
+      ctx.clearRect(0,0,refSize.w, refSize.h);
+      ctx.drawImage(bmR, 0, 0, refSize.w, refSize.h);
     }
 
-    // Worker
     const result = await new Promise((resolve, reject)=>{
       const onMsg = (ev)=>{ cleanup(); resolve(ev.data); };
       const onErr = (err)=>{ cleanup(); reject(err); };
@@ -1822,12 +2327,12 @@ async function analyzeAll(){
       if(origId){
         const origBuf = origId.data.buffer;
         worker.postMessage(
-          { origBuf, refBuf, hasOrig:true, aiType:ai.type, mode:userMode, stridePx, sceneHint, enableSpecPoints },
+          { origBuf, refBuf, hasOrig:true, aiType:ai.type, mode:userMode, stridePx, enableSpecPoints },
           [origBuf, refBuf]
         );
       }else{
         worker.postMessage(
-          { refBuf, hasOrig:false, aiType:ai.type, mode:userMode, stridePx, sceneHint, enableSpecPoints },
+          { refBuf, hasOrig:false, aiType:ai.type, mode:userMode, stridePx, enableSpecPoints },
           [refBuf]
         );
       }
@@ -1835,12 +2340,7 @@ async function analyzeAll(){
 
     if(!result || !result.ok) throw new Error("Worker result invalid");
 
-    result.aiTypeDetected = ai.type;
-    result.aiNote = ai.note;
-    result.cocoTop = cocoTop;
-    result.sceneHint = sceneHint;
-
-    // ✅ PSE HSL Guard 적용
+    // PSE guard
     if(Array.isArray(result.axes)){
       result.axes = result.axes.map(ax=>{
         const avgL01 = (typeof ax.avgL01 === "number") ? ax.avgL01 : 0.5;
@@ -1848,17 +2348,63 @@ async function analyzeAll(){
       });
     }
 
-    // Overlay (optional)
+    // overlay
     const presetKey = document.getElementById("fujiPreset").value;
     const strengthVal = parseInt(document.getElementById("presetStrength").value, 10);
     const strength01 = (presetKey === "off" || strengthVal===0) ? 0 : (strengthVal/100);
-    const finalRes = applyFujiOverlay(result, presetKey, strength01);
 
-    // UI strings
-    const pts = [0,64,128,192,255].map(x=>`IN ${x} → OUT ${finalRes.toneLUT[x]}`);
-    const curveTxt = pts.join("\n");
+    let finalRes = result;
 
-    const axesTxt = finalRes.axes.map(a=>{
+    // 기본: PSE 매핑용 blend는 유지
+    if(presetKey !== "off" && strength01 > 0){
+      const p = FUJI_PRESETS[presetKey];
+
+      finalRes.contrast = clamp(Math.round(lerp(finalRes.contrast, p.contrast, strength01)), -4, 4);
+      finalRes.sat      = clamp(Math.round(lerp(finalRes.sat,      p.sat,      strength01)), -4, 4);
+      finalRes.tone     = clamp(Math.round(lerp(finalRes.tone,     p.tone,     strength01)), -4, 4);
+
+      const pLUT = curve5ToLUT(p.curve5);
+      const outLUT = new Uint8Array(256);
+      for(let i=0;i<256;i++){
+        outLUT[i] = clamp(Math.round(lerp(finalRes.toneLUT[i], pLUT[i], strength01)), 0, 255);
+      }
+      for(let i=1;i<256;i++){ if(outLUT[i] < outLUT[i-1]) outLUT[i] = outLUT[i-1]; }
+      finalRes.toneLUT = outLUT;
+
+      const m = {};
+      (finalRes.axes||[]).forEach(a=> m[a.axis]=a);
+      ["R","Y","G","C","B","M"].forEach(k=>{
+        if(!m[k] || !p.axes[k]) return;
+        m[k].canonH = clamp(Math.round(lerp(m[k].canonH, p.axes[k].H, strength01)), -30, 30);
+        m[k].canonS = clamp(Math.round(lerp(m[k].canonS, p.axes[k].S, strength01)), -30, 30);
+        m[k].canonL = clamp(Math.round(lerp(m[k].canonL, p.axes[k].L, strength01)), -30, 30);
+        m[k] = pseGuardAxisAdjust(m[k], m[k].avgL01 ?? 0.5);
+      });
+      finalRes.axes = ["R","Y","G","C","B","M"].map(k=>m[k]).filter(Boolean);
+
+      // ✅ Classic Negative: 프리뷰 전용 FX를 lastRecipe에 실어줌 (프리뷰 정확도)
+      if(presetKey === "classic_negative" && FUJI_PRESETS.classic_negative.previewFx){
+        const fx = FUJI_PRESETS.classic_negative.previewFx;
+        finalRes.previewFx = {
+          rgbMatrix: fx.rgbMatrix,
+          satMul: lerp(1.0, fx.satMul, strength01),
+          hslRegions: fx.hslRegions
+        };
+      }else{
+        finalRes.previewFx = null;
+      }
+    }else{
+      finalRes.previewFx = null;
+    }
+
+    finalRes.aiTypeDetected = ai.type;
+    finalRes.aiNote = ai.note;
+    finalRes.cocoTop = cocoTop;
+
+    finalRes.baseHint = `${finalRes.base || "표준"}${(presetKey!=="off" && strength01>0) ? (" + "+FUJI_PRESETS[presetKey].name+" "+Math.round(strength01*100)+"%") : ""}`;
+
+    const curveTxt = [0,64,128,192,255].map(x=>`IN ${x} → OUT ${finalRes.toneLUT[x]}`).join("\n");
+    const axesTxt = (finalRes.axes||[]).map(a=>{
       const H = (a.canonH>0?`+${a.canonH}`:`${a.canonH}`);
       const S = (a.canonS>0?`+${a.canonS}`:`${a.canonS}`);
       const L = (a.canonL>0?`+${a.canonL}`:`${a.canonL}`);
@@ -1869,14 +2415,13 @@ async function analyzeAll(){
     const wbText = wb?.ok ? `K ${wb.kelvin} · Shift ${wb.abLabel} / ${wb.gmLabel}` : `WB 분석 불가`;
     const wbRel = wb?.ok ? `${Math.round((wb.reliability||0.2)*100)}%` : `낮음`;
 
+    const skin = finalRes.skin || {ratio:0, highlightRisk:0, sampled:0, source:"none"};
+    const exp  = finalRes.exposure || {shadowRatio:0, highlightRatio:0, midRatio:0, note:"-"};
     const reg  = finalRes.regions || {sky:0, foliage:0, skin:0, valid:0};
-    const exp  = finalRes.exposure || {note:"-", highlightRatio:0, shadowRatio:0};
-    const spDbg = finalRes.spDebug || {enabled:false, note:"-"};
 
     const shotLabel = (shotMode==="one") ? "1장" : "2장";
     const modeLabel = `${shotLabel} / ${modeName(userMode)}${(userMode==="auto") ? (" ("+finalRes.aiNote+")") : ""}`;
 
-    // Specific points display + 0개 사유
     const sp = formatSpecificPoints(finalRes.specificPoints || []);
     document.getElementById("specPill").classList.toggle("hide", !enableSpecPoints);
 
@@ -1885,16 +2430,17 @@ async function analyzeAll(){
     }else if(shotMode !== "two"){
       document.getElementById("sumSpecific").textContent = "2장 모드에서만 생성됩니다. (원본+타겟 필요)";
     }else if((finalRes.specificPoints||[]).length === 0){
+      const dbg = finalRes.spDebug || {};
       document.getElementById("sumSpecific").textContent =
-        `포인트 0개\n- 원인: 색 샘플 부족/장면 차이/저채도\n- 디버그: minCount ${spDbg.minCount || "?"}, stepPx ${spDbg.stepPx || "?"}, cand ${spDbg.candidates || "?"}, note ${spDbg.note || "-"}`;
+        `포인트 0개\n- 디버그: minCount ${dbg.minCount ?? "?"}, cand ${dbg.candidates ?? "?"}, note ${dbg.note ?? "-"}`;
     }else{
+      const dbg = finalRes.spDebug || {};
       document.getElementById("sumSpecific").textContent =
-        sp.summary + `\n\n[dbg] minCount ${spDbg.minCount}, stepPx ${spDbg.stepPx}, picked ${spDbg.picked}, fallback ${spDbg.fallbackPicked}, note ${spDbg.note}`;
+        sp.summary + `\n\n[dbg] minCount ${dbg.minCount}, cand ${dbg.candidates}, note ${dbg.note}`;
     }
 
-    // Render
     document.getElementById("sumMode").textContent = modeLabel;
-    document.getElementById("sumBase").textContent = finalRes.baseHint || finalRes.base || "-";
+    document.getElementById("sumBase").textContent = finalRes.baseHint;
     document.getElementById("sumBasic").textContent = `Contrast ${finalRes.contrast} · Saturation ${finalRes.sat} · Tone ${finalRes.tone}`;
     document.getElementById("sumLift").textContent = finalRes.lift?.isLifted ? `+${finalRes.lift.liftPx}px` : "없음";
     document.getElementById("sumWB").textContent = wbText;
@@ -1906,24 +2452,49 @@ async function analyzeAll(){
       ? `COCO Top: ${finalRes.cocoTop.class} (${Math.round(finalRes.cocoTop.score*100)}%) area ${Math.round(finalRes.cocoTop.areaRatio*100)}%`
       : `COCO Top: -`;
 
+    const fxLine = (presetKey==="classic_negative" && strength01>0)
+      ? `ClassicNeg MatrixFX: ON (preview only)`
+      : `ClassicNeg MatrixFX: -`;
+
     document.getElementById("sumExtra").textContent =
-      `PSE-HSLGuard: ON · Regions Sky ${Math.round((reg.sky||0)*100)}% / Fol ${Math.round((reg.foliage||0)*100)}% · ` +
-      `Exposure: ${exp.note} (Hi ${Math.round((exp.highlightRatio||0)*100)}%, Sh ${Math.round((exp.shadowRatio||0)*100)}%) · ` +
-      `${cocoLine}`;
+      `PSE-HSLGuard: ON · Skin ${Math.round((skin.ratio||0)*100)}% · ` +
+      `Regions Sky ${Math.round((reg.sky||0)*100)}% / Fol ${Math.round((reg.foliage||0)*100)}% · ` +
+      `Exposure: ${exp.note} (Hi ${Math.round(exp.highlightRatio*100)}%, Sh ${Math.round(exp.shadowRatio*100)}%) · ` +
+      `${cocoLine} · ${fxLine}`;
+
+    // Store lastRecipe for preview(Recipe mode)
+    lastRecipe = {
+      name: "LastRecipe",
+      contrast: finalRes.contrast,
+      sat: finalRes.sat,
+      tone: finalRes.tone,
+      toneLUT: finalRes.toneLUT,
+      axes: (finalRes.axes||[]).map(a=>({axis:a.axis, canonH:a.canonH, canonS:a.canonS, canonL:a.canonL, avgL01:a.avgL01 ?? 0.5})),
+      specificPoints: finalRes.specificPoints || [],
+      baseHint: finalRes.baseHint,
+      wb: finalRes.wb,
+      previewFx: finalRes.previewFx || null, // ✅ 프리뷰 렌더에 반영
+      meta: `Last analysis (${modeLabel})`
+    };
+    refreshPreviewReady();
+
+    if(prevFileState && document.getElementById("previewMode").value === "recipe"){
+      queuePreviewRender("analysisComplete");
+    }
 
     const presetLabel = (presetKey==="off" || strength01===0)
       ? "Look Overlay: OFF"
       : `Look Overlay: ${FUJI_PRESETS[presetKey].name} (${Math.round(strength01*100)}%)`;
 
     summaryText =
-`[Canon Recipe Generator Pro v11.1.1]
+`[Canon Recipe Generator Pro v11.4]
 - Mode: ${modeLabel}
 - ${presetLabel}
-- Base: ${finalRes.baseHint || finalRes.base}
+- Base: ${finalRes.baseHint}
 - Basic: Contrast ${finalRes.contrast}, Sat ${finalRes.sat}, Tone ${finalRes.tone}
 - WB: ${wbText} (Rel ${wbRel})
 - PSE-HSLGuard: ON
-- Regions: Sky ${Math.round((reg.sky||0)*100)}% / Fol ${Math.round((reg.foliage||0)*100)}%
+- ${fxLine}
 - ${cocoLine}
 
 [Curve]
@@ -1931,6 +2502,7 @@ ${curveTxt}
 
 [6-Axis]
 ${axesTxt}
+${enableSpecPoints ? ("\n[Specific Colors Points - Top]\n"+sp.summary) : ""}
 `;
 
     const warnBlock = (finalRes.warnings && finalRes.warnings.length)
@@ -1943,45 +2515,39 @@ ${axesTxt}
 
     fullText =
 `==================================================
- Canon Recipe Generator Pro v11.1.1 (HOTFIX)
+ Canon Recipe Generator Pro v11.4 (ClassicNeg Matrix)
 ==================================================
 Shot: ${shotMode==="one"?"1-shot(target)":"2-shot(orig+target)"}
 Mode: ${modeName(userMode)}${(userMode==="auto") ? (" / "+finalRes.aiNote) : ""}
 ${presetLabel}
 ${cocoLine}
+PSE-HSLGuard: ON
+${fxLine}
 
-${warnBlock}[WB]
-- ${wbText} (Rel ${wbRel})
+${warnBlock}[0) WB Suggest]
+- ${wbText}
+- Reliability: ${wbRel}
 
-[Base]
-- ${finalRes.baseHint || finalRes.base}
+[1) Base]
+- ${finalRes.baseHint}
 - Reason: ${finalRes.baseReason || "-"}
 
-[Basic]
+[2) Basic]
 - Contrast: ${finalRes.contrast}
 - Saturation: ${finalRes.sat}
 - Tone: ${finalRes.tone}
 - Black Lift: ${finalRes.lift?.isLifted ? ("ON (+"+finalRes.lift.liftPx+"px)") : "OFF"}
 
-[Tone Curve]
-${pts.map(s=>"• "+s).join("\n")}
+[3) Tone Curve (IN→OUT)]
+${curveTxt}
 
-[6-Axis (PSE-HSLGuard Applied)]
+[4) 6-Axis (Canon PSE H/S/L)]
 ${finalRes.axes.map(a=>{
   const H = (a.canonH>0?`+${a.canonH}`:`${a.canonH}`);
   const S = (a.canonS>0?`+${a.canonS}`:`${a.canonS}`);
   const L = (a.canonL>0?`+${a.canonL}`:`${a.canonL}`);
   return `[${a.axis}] H:${H}  S:${S}  L:${L}`;
 }).join("\n")}
-
-[SpecificPoints Debug]
-- enabled: ${spDbg.enabled}
-- minCount: ${spDbg.minCount}
-- stepPx: ${spDbg.stepPx}
-- candidates: ${spDbg.candidates}
-- picked: ${spDbg.picked}
-- fallbackPicked: ${spDbg.fallbackPicked}
-- note: ${spDbg.note}
 
 ${spFullBlock}==================================================`;
 
@@ -1990,6 +2556,7 @@ ${spFullBlock}==================================================`;
     document.getElementById("resultCard").classList.remove("hide");
     setTab("sum");
     document.getElementById("resultCard").scrollIntoView({behavior:"smooth"});
+
   }catch(e){
     console.error(e);
     alert(
@@ -2007,7 +2574,7 @@ ${spFullBlock}==================================================`;
 }
 
 /* =========================================================
-   Copy (clipboard fallback)
+   Clipboard
 ========================================================= */
 async function copyTextSafe(txt){
   try{
@@ -2042,13 +2609,62 @@ async function copyFull(){
 }
 
 /* =========================================================
+   Events
+========================================================= */
+document.getElementById("previewMode").addEventListener("change", ()=>{
+  updatePreviewLabels();
+  refreshPreviewReady();
+  if(prevFileState) queuePreviewRender("previewModeChange");
+});
+document.getElementById("previewDim").addEventListener("change", ()=>{
+  refreshPreviewReady();
+  if(prevFileState) queuePreviewRender("previewDimChange");
+});
+document.getElementById("previewStrength").addEventListener("input", ()=>{
+  updatePreviewLabels();
+  if(prevFileState) queuePreviewRender("previewStrength");
+});
+document.getElementById("btnPreviewApply").addEventListener("click", ()=>{
+  if(prevFileState) queuePreviewRender("manualClick");
+});
+document.getElementById("btnPreviewReset").addEventListener("click", ()=>{
+  split01 = 0.5;
+  drawSplitFromCache();
+});
+document.getElementById("btnPreviewSave").addEventListener("click", ()=>{
+  savePreviewPNG();
+});
+document.getElementById("fujiPreset").addEventListener("change", ()=>{
+  updatePresetLabel();
+  refreshPreviewReady();
+  if(prevFileState && document.getElementById("previewMode").value === "preset"){
+    queuePreviewRender("presetChange");
+  }
+});
+document.getElementById("presetStrength").addEventListener("input", ()=>{
+  updateStrengthLabel();
+  updatePresetLabel();
+  if(prevFileState && document.getElementById("previewMode").value === "preset"){
+    queuePreviewRender("presetStrength");
+  }
+});
+document.getElementById("aiBoost").addEventListener("change", ()=>{
+  document.getElementById("aiBoostLabel").textContent = (document.getElementById("aiBoost").value==="coco") ? "ACCURACY" : "FAST";
+});
+document.getElementById("specPoints").addEventListener("change", ()=>{
+  document.getElementById("specPointsLabel").textContent = (document.getElementById("specPoints").value==="on") ? "ON" : "OFF";
+});
+
+/* =========================================================
    Boot
 ========================================================= */
 window.onload = ()=>{
-  setupDropZone("dropOrig","origFile","thumbOrig","fileOrig", f=>origFileState=f);
-  setupDropZone("dropRef","refFile","thumbRef","fileRef", f=>refFileState=f);
+  setupDropZone("dropPrev","prevFile","thumbPrev","filePrev", f=>{ prevFileState=f; });
+  setupDropZone("dropOrig","origFile","thumbOrig","fileOrig", f=>{ origFileState=f; });
+  setupDropZone("dropRef","refFile","thumbRef","fileRef", f=>{ refFileState=f; });
 
   initWorker();
+  bindPreviewDrag();
 
   // Look Overlay 기본값 OFF
   document.getElementById("fujiPreset").value = "off";
@@ -2058,11 +2674,16 @@ window.onload = ()=>{
   document.getElementById("aiBoostLabel").textContent = "FAST";
   document.getElementById("specPointsLabel").textContent = "ON";
 
+  updatePreviewLabels();
+  refreshPreviewReady();
+  setPvMeta("미리보기 사진을 업로드하세요");
+
   setShot("one");
   setMode("auto");
   setTab("sum");
 
   setAIUI("idle", "AI 미로딩 (자동 시 분석 때 로딩)");
+
   refreshReady();
 };
 </script>
